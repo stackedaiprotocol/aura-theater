@@ -3,12 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AURA THEATER — SEQ-001 FIRST LIGHT</title>
+<title>AURA THEATER v1.1 — LIVING CHAMBER</title>
 <!--
-  Aura Theater Event Playback MVP — aura_theater_v1.html
-  Governed by ATD-001 RevD (design law) and ATD-002 RevB (sealed build brief).
-  Single self-contained file. No backend, no build tooling, no external deps.
-  Runs from disk and as a 1920x1080 OBS browser source.
+  Aura Theater — aura_theater_v1.html (artifact AURA THEATER v1.1)
+  Governed by ATD-001 RevE (design law), ATD-002 RevB (MVP brief), ATD-003 RevC
+  (integration doctrine + v1.1 build brief). Single self-contained file, no deps.
+  Runs from disk (single-mount playback) and as an OBS / served browser source.
+  Operator keys: SPACE pause · R restart · H hud · L ledger · V intensity (OFF/GLANCE/THEATER)
+                 · 1 SEQ-001 · 2 SEQ-002.
 
   Architecture (ATD-002 section 8 / ATD-001 section 13), strict separation:
     SCRIPT JSON -> EVENT INTERPRETER -> STATE STORE <- RENDER LOOP
@@ -50,6 +52,13 @@
     font-family:ui-monospace,monospace;font-size:12px;letter-spacing:.4em;color:var(--dim);
     text-transform:uppercase;pointer-events:none;opacity:0;transition:opacity .25s}
   #paused.show{opacity:1}
+  /* ATD-003 §11 intensity modes: GLANCE shows a single status line; OFF hides all chrome */
+  .glance{position:fixed;left:0;right:0;bottom:16px;text-align:center;
+    font-family:ui-monospace,"SF Mono","Courier New",monospace;font-size:11px;letter-spacing:.18em;
+    text-transform:uppercase;color:var(--hud);opacity:0;pointer-events:none;transition:opacity .35s}
+  body.i-glance .glance{opacity:1}
+  body.i-glance #hud, body.i-glance #ledger{opacity:0}
+  body.i-off #hud, body.i-off #ledger, body.i-off .glance{opacity:0}
 </style>
 </head>
 <body>
@@ -63,6 +72,7 @@
   <div class="lr" id="lr"></div>
 </div>
 <div class="ledger" id="ledger"></div>
+<div class="glance" id="glance"></div>
 <div id="paused">PAUSED</div>
 
 <script>
@@ -96,6 +106,9 @@ const T_QUEUE_GAP   = 0.4;
 const T_LEDGER_FADE = 0.6;
 const T_SIGNAL      = 1.2;         // amber surfacing fade (render detail; see BUILD-REPORT D)
 const T_MARK_SETTLE = 2.0;         // foundation mark settle decay (section 6.3)
+const T_AMBIENT_COALESCE = 0.8;    // ambient pulses of one class merge within this window (ATD-003 §9)
+const T_AMBIENT_LIFE     = 0.7;    // ambient micro-pulse lifetime — a sub-second whisper
+const T_PULSE_LIFE       = 1.2;    // notable one-shot pulse lifetime (logboss flag, anvil)
 
 // ---- Render tuning (exposed named constants; values unchanged) ----
 // Active-disc luminance exposed per ATD-CL-001 §7 change order. Values are unchanged from
@@ -143,6 +156,9 @@ function initStore(){
     signals:[],
     foundation_marks:[],
     ledger:[],
+    ambient:[],            // ATD-003 Law T3: ambient whispers (coalescing, non-queued)
+    pulses:[],             // notable one-shot pulses (logboss flag, anvil)
+    forgeForm:null,        // forge-form ephemeral lattice timestamp on the Project Disc
     sealed_today:0,
     vaulted_today:0,
     // render-only derived flags (still pure functions of events)
@@ -184,6 +200,40 @@ const SEQ = {
     { "t":92.0, "event_type":"state_hold",        "mode":"build", "subject_id":"system",          "visibility":"public" }
   ]
 };
+
+// SEQ-002 LIVING CHAMBER (ATD-003 §14) — exercises the v1.1 grammar (weights, ambient, forge, help)
+const SEQ_002 = {
+  "script_id":"SEQ-002","title":"LIVING CHAMBER",
+  "events":[
+    { "t":0.0,  "event_type":"mode_entered",       "weight":"notable",    "mode":"free",  "subject_id":"system" },
+    { "t":4.0,  "event_type":"cron_fired",          "weight":"ambient",    "mode":"free",  "subject_id":"cron_a", "disc":"guild" },
+    { "t":6.0,  "event_type":"cron_fired",          "weight":"ambient",    "mode":"free",  "subject_id":"cron_b", "disc":"guild" },
+    { "t":9.0,  "event_type":"mode_entered",        "weight":"notable",    "mode":"plan",  "subject_id":"system" },
+    { "t":14.0, "event_type":"project_loaded",      "weight":"notable",    "mode":"plan",  "subject_id":"project_22", "disc":"project", "label":"PRJ-22" },
+    { "t":19.0, "event_type":"graduate_invoked",    "weight":"notable",    "mode":"plan",  "subject_id":"planner", "seat":"S2" },
+    { "t":23.0, "event_type":"logboss_field_event", "weight":"ambient",    "mode":"plan",  "subject_id":"lb_1", "disc":"guild" },
+    { "t":23.6, "event_type":"logboss_field_event", "weight":"ambient",    "mode":"plan",  "subject_id":"lb_2", "disc":"guild" },
+    { "t":24.2, "event_type":"logboss_field_event", "weight":"ambient",    "mode":"plan",  "subject_id":"lb_3", "disc":"guild" },
+    { "t":27.0, "event_type":"mode_entered",        "weight":"notable",    "mode":"forge", "subject_id":"system" },
+    { "t":31.0, "event_type":"sim_started",         "weight":"notable",    "mode":"forge", "subject_id":"sim_a", "disc":"project", "label":"SIM-A" },
+    { "t":33.0, "event_type":"cron_fired",          "weight":"ambient",    "mode":"forge", "subject_id":"cron_c", "disc":"project" },
+    { "t":35.0, "event_type":"sim_completed",       "weight":"notable",    "mode":"forge", "subject_id":"sim_a" },
+    { "t":39.0, "event_type":"forge_disc_created",  "weight":"notable",    "mode":"forge", "subject_id":"forge_form_1", "disc":"project" },
+    { "t":43.0, "event_type":"glyph_loaded",        "weight":"notable",    "mode":"forge", "subject_id":"glyph_synthesis", "disc":"project", "family":"craft" },
+    { "t":47.0, "event_type":"glyph_resolved",      "weight":"notable",    "mode":"forge", "subject_id":"glyph_synthesis" },
+    { "t":49.0, "event_type":"proposal_formed",     "weight":"notable",    "mode":"forge", "subject_id":"diamond_001", "disc":"project", "label":"FORGE OUTPUT" },
+    { "t":52.0, "event_type":"awaiting_human",      "weight":"notable",    "mode":"forge", "subject_id":"diamond_001" },
+    { "t":56.0, "event_type":"cron_fired",          "weight":"ambient",    "mode":"forge", "subject_id":"cron_d", "disc":"guild" },
+    { "t":60.0, "event_type":"seal_completed",      "weight":"ceremonial", "mode":"forge", "subject_id":"diamond_001", "actor":"human_architect", "label":"FORGE CONFIRMED" },
+    { "t":64.0, "event_type":"vault_registered",    "weight":"ceremonial", "mode":"forge", "subject_id":"diamond_001" },
+    { "t":69.0, "event_type":"cron_fired",          "weight":"ambient",    "mode":"forge", "subject_id":"cron_e", "disc":"guild" },
+    { "t":72.0, "event_type":"help_opened",         "weight":"ambient",    "mode":"forge", "subject_id":"help" },
+    { "t":74.0, "event_type":"help_closed",         "weight":"ambient",    "mode":"forge", "subject_id":"help" },
+    { "t":76.0, "event_type":"state_hold",          "weight":"notable",    "mode":"forge", "subject_id":"system" }
+  ]
+};
+
+let activeSeq = SEQ;             // operator selects SEQ-001 (1) or SEQ-002 (2)
 
 /* ============================================================================
    5. GEOMETRY  (ATD-002 section 3.1, 3.2) — normalized, rebuilt on resize
@@ -258,7 +308,33 @@ function updateQueue(clock){
 const DICT = new Set(['mode_entered','agenda_loaded','project_loaded','graduate_invoked',
   'graduate_released','glyph_loaded','glyph_resolved','relay_activated','relay_resolved',
   'proposal_formed','awaiting_human','seal_completed','vault_registered','zero_seat_surfaced',
-  'state_hold','fault']);
+  'state_hold','fault',
+  // ATD-003 §10 expanded dictionary
+  'cron_fired','logboss_field_event','logboss_field_flag','sim_started','sim_completed',
+  'forge_disc_created','anvil_activity','help_opened','help_closed']);
+
+// ATD-003 Law T3: weight is a fixed property of the event type. Explicit ev.weight wins;
+// otherwise default so SEQ-001 (no weight field) behaves exactly as before.
+const CEREMONIAL_EVENTS = new Set(['seal_completed','vault_registered']);
+const AMBIENT_EVENTS    = new Set(['cron_fired','logboss_field_event','help_opened','help_closed']);
+function weightOf(ev){
+  if(ev.weight) return ev.weight;
+  if(CEREMONIAL_EVENTS.has(ev.event_type)) return 'ceremonial';
+  if(AMBIENT_EVENTS.has(ev.event_type)) return 'ambient';
+  return 'notable';
+}
+function ambientTarget(ev){
+  if(ev.event_type==='help_opened'||ev.event_type==='help_closed') return 'aura';
+  if(ev.event_type==='logboss_field_event') return 'guild';
+  return ev.disc || PRIMARY_DISC[store.mode] || 'project';
+}
+// Ambient bypasses the queue entirely; bursts of one class coalesce into one shimmer (§9).
+function emitAmbient(ev){
+  const target=ambientTarget(ev), cls=ev.event_type+'@'+target;
+  const ex=store.ambient.find(p=>p.cls===cls && (clock-p.t0)<T_AMBIENT_COALESCE);
+  if(ex){ ex.t0=clock; ex.merged=(ex.merged||1)+1; }   // refresh, do not spawn a second
+  else  { store.ambient.push({cls,target,kind:ev.event_type,t0:clock,merged:1}); }
+}
 
 const findDiamond = id => store.diamonds.find(d=>d.id===id);
 const seatIndex   = s  => 'S123456'.indexOf(s[1]) >=0 ? (parseInt(s[1],10)-1) : -1;
@@ -267,6 +343,11 @@ const seatPosById = id => { for(let i=0;i<6;i++){const g=store.seats[i]; if(g&&g
 function applyEvent(ev, clock){
   if(!DICT.has(ev.event_type)){ console.warn('[reject] unknown event_type', ev); return; }
   if(!ev.subject_id){ console.warn('[reject] missing subject_id', ev); return; }
+
+  // ATD-003 Law T3: ambient tier renders a direct, non-queued whisper and never blocks,
+  // never queues, never produces gold. Visual-only — not written to the witness ledger,
+  // so high-frequency whispers do not bury notable/ceremonial entries (recorded in BUILD-REPORT).
+  if(weightOf(ev)==='ambient'){ emitAmbient(ev); return; }
 
   switch(ev.event_type){
     case 'mode_entered':
@@ -370,6 +451,34 @@ function applyEvent(ev, clock){
                        label:ev.label,t0:c}); } });
       ledger(ev); break;
 
+    // ---- ATD-003 §10 expanded dictionary (notable tier; ambient handled above) ----
+    case 'logboss_field_flag':                // a flagged field item — one notable pulse, not a ceremony
+      enqueue({ dur:1.0,
+        onStart:(c)=>{ store.pulses.push({target:'guild',t0:c,kind:'flag'}); } });
+      ledger(ev); break;
+
+    case 'sim_started': {                     // simulation glyph forms on the Project Disc
+      const dsc = ev.disc||'project';
+      enqueue({ dur:T_GLYPH_FORM,
+        onStart:(c)=>{ store.glyphs.push({id:ev.subject_id,disc:dsc,state:'forming',t0:c,sim:true}); },
+        onDone:()=>{ const g=store.glyphs.find(g=>g.id===ev.subject_id); if(g) g.state='active'; } });
+      ledger(ev); break;
+    }
+    case 'sim_completed': {                    // G1: resolves to cyan and holds (NOT white) — like glyph_resolved
+      const g = store.glyphs.find(g=>g.id===ev.subject_id);
+      if(g) g.state='resolved';
+      ledger(ev); break;
+    }
+    case 'forge_disc_created':                // Project Disc reforms into an ephemeral forge form. No 4th disc.
+      enqueue({ dur:T_REFORM,
+        onStart:(c)=>{ store.active_disc='project'; G.reform.project=c; store.forgeForm=c; } });
+      ledger(ev); break;
+
+    case 'anvil_activity':                    // craft motion on the project layer (forge-family)
+      enqueue({ dur:1.0,
+        onStart:(c)=>{ store.pulses.push({target:(ev.disc||'project'),t0:c,kind:'anvil'}); } });
+      ledger(ev); break;
+
     case 'state_hold':                        // explicit hold — everything persists
       store.held=true; store.aura_state='witnessing';
       ledger(ev); break;
@@ -406,6 +515,11 @@ function ledgerEntry(ev){
     case 'seal_completed':    return {label: priv?'ITEM SEALED':(ev.label||'SEALED'), color:GOLD};
     case 'vault_registered':  return {label: priv?'ITEM REGISTERED':'REGISTERED', color:PURPLE};
     case 'zero_seat_surfaced':return {label: ev.label||'ZERO SEAT', color:AMBER};
+    case 'logboss_field_flag':return {label:'FIELD FLAG', color:CYAN};
+    case 'sim_started':       return {label:(ev.label||'SIM')+' STARTED', color:CYAN};
+    case 'sim_completed':     return {label:'SIM RESOLVED', color:CYAN};
+    case 'forge_disc_created':return {label:'FORGE FORM', color:CYAN};
+    case 'anvil_activity':    return {label:'ANVIL', color:CYAN};
     case 'state_hold':        return {label:'HOLD', color:WHITE};
     case 'fault':             return {label:'FAULT', color:FAULT};
   }
@@ -425,10 +539,11 @@ function restart(){
   store = initStore(); queue=[]; active=null; lastDoneT=-1e9; clock=0; fired=0;
   G.reform = {agenda:null,project:null,guild:null}; aura.init=false;
 }
+function loadScript(which){ activeSeq = (which==='2') ? SEQ_002 : SEQ; restart(); }
 function update(){
   // fire scripted events whose t has arrived
-  while(fired < SEQ.events.length && SEQ.events[fired].t <= clock){
-    applyEvent(SEQ.events[fired], clock);
+  while(fired < activeSeq.events.length && activeSeq.events[fired].t <= clock){
+    applyEvent(activeSeq.events[fired], clock);
     fired++;
   }
   updateQueue(clock);
@@ -541,6 +656,18 @@ function drawDiscEllipse(name){
   if(store.mode==='free' && name==='agenda') base=DISC_LUM_FREE_AGENDA;   // Free: Agenda dim (section 6)
   const a = base*(0.25+0.75*settle);
   ell(d.cx,d.cy,d.rx,d.ry,CYAN,a,1.2,9*a);
+  // forge form (ATD-003 §10): an ephemeral inner craft lattice on the Project Disc that
+  // forms and resolves. It is NOT a fourth disc — the three-disc doctrine holds.
+  if(name==='project' && store.forgeForm!=null){
+    const fk=clamp((clock-store.forgeForm)/(T_REFORM*1.6),0,1);
+    if(fk<1){
+      const fa=Math.sin(fk*Math.PI)*0.5*(isGlance()?0.6:1);
+      const rr=d.rx*lerp(0.45,0.92,fk);
+      ell(d.cx,d.cy,rr,rr*FT,CYAN,fa,1.0,8);
+      for(let i=0;i<6;i++){ const ang=i/6*TAU+clock*0.4;
+        seatMark(d.cx+Math.cos(ang)*rr, d.cy+Math.sin(ang)*rr*FT, CYAN, fa*0.8, 5); }
+    }
+  }
   if(name!=='guild'){
     const N=9, spin=(1-easeOutCubic(reformP))*TAU*0.5 + clock*0.05;
     for(let i=0;i<N;i++){
@@ -617,6 +744,35 @@ function drawFoundation(){
     const a=0.35+0.65*(1-k);                 // settle: 1.0 -> 0.35 over 2.0s
     dot(mx,my,6,GOLD,a*0.18,8);              // halo
     dot(mx,my,2.5,GOLD,a,6);                 // gold-residue point
+  }
+}
+
+// ---- Ambient whispers (Law T3) + notable one-shot pulses ----
+function ambientPos(target){
+  if(target==='aura') return {x:(aura.init?aura.x:G.aura.x), y:(aura.init?aura.y:G.aura.y)};
+  const d=G.discs[target]; return d?{x:d.cx,y:d.cy}:{x:G.spineX,y:G.discs.project.cy};
+}
+function drawAmbient(){
+  const dim = isGlance()?0.45:1;                 // faint/coalesced in GLANCE (§11)
+  for(let i=store.ambient.length-1;i>=0;i--){
+    const p=store.ambient[i], age=clock-p.t0;
+    if(age>T_AMBIENT_LIFE){ store.ambient.splice(i,1); continue; }
+    const k=age/T_AMBIENT_LIFE, env=Math.sin(clamp(k,0,1)*Math.PI);  // soft rise and fall
+    const pos=ambientPos(p.target), grow=Math.min(p.merged,4);
+    const a=env*0.20*dim;                          // low-luminance whisper
+    ell(pos.x,pos.y, lerp(4,14+3*grow,k), lerp(4,14,k)*FT, CYAN, a*0.7, 1, 6);
+    dot(pos.x,pos.y, 2.0, CYAN, a, 7);
+  }
+}
+function drawPulses(){
+  const dim = isGlance()?0.5:1;                   // reduced form in GLANCE
+  for(let i=store.pulses.length-1;i>=0;i--){
+    const p=store.pulses[i], age=clock-p.t0;
+    if(age>T_PULSE_LIFE){ store.pulses.splice(i,1); continue; }
+    const k=age/T_PULSE_LIFE, env=Math.sin(clamp(k,0,1)*Math.PI);
+    const pos=ambientPos(p.target), a=env*0.5*dim;
+    ell(pos.x,pos.y, lerp(6,26,k), lerp(6,26,k)*FT, CYAN, a*0.7, 1.2, 8);  // cyan: working channel (not amber)
+    dot(pos.x,pos.y, 2.6, CYAN, a, 10);
   }
 }
 
@@ -745,14 +901,19 @@ function render(){
   ctx.clearRect(0,0,G.W,G.H);
   ctx.fillStyle=VOID; ctx.fillRect(0,0,G.W,G.H);
 
+  const gl=isGlance();
+  drawAmbient();                                  // under everything (Law T3 whisper)
   drawSpine();
   drawDiscEllipse('agenda'); drawDiscEllipse('project'); drawDiscEllipse('guild');
   drawFoundation();
+  drawPulses();                                   // notable one-shot pulses
+  ctx.save(); if(gl) ctx.globalAlpha=0.72;        // GLANCE: notable choreography in reduced form
   drawSeatsAndGraduates();
   drawRelays();
   drawGlyphs();
   drawSignals();
-  drawDiamonds();
+  ctx.restore();
+  drawDiamonds();                                 // lifecycle + ceremonies (full, even in GLANCE)
   drawAura();
 
   // mode-transition dim overlay (section 6.1) — dim, hold, reform, return
@@ -777,7 +938,7 @@ const MODE_HUD = {
 };
 const elUL=document.getElementById('ul'), elUR=document.getElementById('ur'),
       elLL=document.getElementById('ll'), elLR=document.getElementById('lr'),
-      elLedger=document.getElementById('ledger');
+      elLedger=document.getElementById('ledger'), elGlance=document.getElementById('glance');
 function lrLines(){
   const N=store.sealed_today, V=store.vaulted_today, ctr='SEALED: '+N+' / VAULTED: '+V;
   if(store.registering) return ['VAULT: OPEN','MEMORY: WRITING'];
@@ -788,12 +949,16 @@ function lrLines(){
 }
 function updateHUD(){
   const m=MODE_HUD[store.mode]||MODE_HUD.free;
+  const N=store.sealed_today, V=store.vaulted_today;
+  // GLANCE single status line (§11): mode + dual counter. Always kept current; shown via CSS.
+  elGlance.textContent = m.ul[0]+'  ·  SEALED: '+N+' / VAULTED: '+V;
+  if(intensity!=='theater') return;             // GLANCE/OFF: skip the full HUD projection
   elUL.innerHTML='<span class="ttl">A U R A</span>'
     +'<div class="v">'+m.ul[0]+'</div><div class="k">'+m.ul[1]+'</div>';
   elUR.innerHTML='<div class="v">'+m.ur[0]+'</div><div class="k">'+m.ur[1]+'</div>'
-    +'<div class="sub">SEQ-001 · FIRST LIGHT</div>';
+    +'<div class="sub">'+activeSeq.script_id+' · '+activeSeq.title+'</div>';
   elLL.innerHTML='<div><span class="k">STATION</span> <span class="v">AURA-BASE 01</span></div>'
-    +'<div><span class="k">BUILD</span> <span class="v">ATD-002 v1.1</span></div>';
+    +'<div><span class="k">BUILD</span> <span class="v">AURA THEATER v1.1</span></div>';
   const lr=lrLines();
   elLR.innerHTML='<div class="v">'+lr[0]+'</div>'+(lr[1]?'<div class="k">'+lr[1]+'</div>':'');
   // Witness ledger: last 5, newest at top, oldest fading (section 11.2)
@@ -813,12 +978,33 @@ function updateHUD(){
 /* ============================================================================
    12. FRAME DRIVER + OPERATOR KEYS  (SPACE pause, R restart, H hud, L ledger)
    ========================================================================== */
+// ---- Intensity (view setting only; not Axis state, not reset by restart) — ATD-003 §5/§11
+let intensity = 'theater';
+const isGlance = ()=> intensity==='glance';
+(function(){ const q=new URLSearchParams(location.search).get('intensity');
+  if(q && ['off','glance','theater'].includes(q)) intensity=q; })();
+function applyIntensityClass(){
+  document.body.classList.toggle('i-glance', intensity==='glance');
+  document.body.classList.toggle('i-off',    intensity==='off');
+}
+function paintVoid(){ ctx.clearRect(0,0,G.W,G.H); ctx.fillStyle=VOID; ctx.fillRect(0,0,G.W,G.H); }
+function setIntensity(v){
+  intensity=v; applyIntensityClass();
+  if(intensity==='off'){ paintVoid(); }          // OFF: blank frame, loop halts (see frame)
+  else { startLoop(); render(); }
+}
+function cycleIntensity(){ setIntensity(intensity==='theater'?'glance':(intensity==='glance'?'off':'theater')); }
+
+let rafId=null;
 function frame(now){
   const dt=Math.min((now-lastFrame)/1000, 0.05); lastFrame=now;
+  if(intensity==='off'){ rafId=null; return; }    // OFF halts the render loop — no rAF scheduled
   if(!paused){ clock+=dt; update(); }
   render();
-  requestAnimationFrame(frame);
+  rafId=requestAnimationFrame(frame);
 }
+function startLoop(){ if(rafId==null){ lastFrame=performance.now(); rafId=requestAnimationFrame(frame); } }
+
 window.addEventListener('keydown',(e)=>{
   const k=e.key.toLowerCase();
   if(e.code==='Space'||k===' '){ e.preventDefault(); paused=!paused;
@@ -826,8 +1012,12 @@ window.addEventListener('keydown',(e)=>{
   else if(k==='r'){ restart(); }
   else if(k==='h'){ document.getElementById('hud').classList.toggle('off'); }
   else if(k==='l'){ elLedger.classList.toggle('off'); }
+  else if(k==='v'){ cycleIntensity(); }            // OFF / GLANCE / THEATER
+  else if(k==='1'){ loadScript('1'); }             // SEQ-001 FIRST LIGHT
+  else if(k==='2'){ loadScript('2'); }             // SEQ-002 LIVING CHAMBER
 });
-requestAnimationFrame(frame);
+applyIntensityClass();
+if(intensity==='off') paintVoid(); else startLoop();
 </script>
 </body>
 </html>
