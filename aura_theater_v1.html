@@ -97,6 +97,13 @@ const T_LEDGER_FADE = 0.6;
 const T_SIGNAL      = 1.2;         // amber surfacing fade (render detail; see BUILD-REPORT D)
 const T_MARK_SETTLE = 2.0;         // foundation mark settle decay (section 6.3)
 
+// ---- Render tuning (exposed named constants; values unchanged) ----
+// Active-disc luminance exposed per ATD-CL-001 §7 change order. Values are unchanged from
+// the accepted P5 build; v1.1 may tune DISC_LUM_ACTIVE against the live OBS output.
+const DISC_LUM_ACTIVE      = 0.50; // active disc base alpha
+const DISC_LUM_IDLE        = 0.26; // inactive disc base alpha
+const DISC_LUM_FREE_AGENDA = 0.30; // Free mode: Agenda held dim (section 6)
+
 /* ============================================================================
    2. MATH / EASING / DETERMINISTIC INSTABILITY  (no RNG anywhere)
    ========================================================================== */
@@ -530,8 +537,8 @@ function drawDiscEllipse(name){
   let reformP=1;
   if(G.reform[name]!=null) reformP=clamp((clock-G.reform[name])/T_REFORM,0,1);
   const settle = easeInOutSine(reformP);
-  let base = isActive ? 0.50 : 0.26;
-  if(store.mode==='free' && name==='agenda') base=0.30;        // Free: Agenda dim (section 6)
+  let base = isActive ? DISC_LUM_ACTIVE : DISC_LUM_IDLE;
+  if(store.mode==='free' && name==='agenda') base=DISC_LUM_FREE_AGENDA;   // Free: Agenda dim (section 6)
   const a = base*(0.25+0.75*settle);
   ell(d.cx,d.cy,d.rx,d.ry,CYAN,a,1.2,9*a);
   if(name!=='guild'){
