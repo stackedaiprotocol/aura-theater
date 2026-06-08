@@ -134,6 +134,39 @@ Working branch: `claude/youthful-ramanujan-A2inC` (continues accepted v1.0 `f5d8
 - **Build string:** Lower-Left changes from `BUILD: ATD-002 v1.1` to `BUILD: AURA THEATER v1.1`
   (§8) — the build string now names the artifact, not the brief; supersedes the E1 coupling.
 
-## H. v1.1 acceptance checklist results
+## H. P2-gate refinements (design-lead-authorized at GLANCE approval)
 
-To be completed at P4 (carried 1–12 plus new 13–21). Results recorded after verification.
+The Human Architect approved the GLANCE compact profile at 480×270 with three refinements,
+folded in before P3 (these refine the P2 deliverable; no sealed doctrine altered):
+
+1. **Mode word brightened.** In the GLANCE status line the mode word renders brightest
+   (`.gmode` = `--bright`), counters a step quieter (`.gctr` = `--hud`), so a glance lands on
+   mode first.
+2. **Ceremonial-only GLANCE echo.** In GLANCE, `seal_completed` / `vault_registered` surface a
+   single transient line that fades over `T_GLANCE_ECHO` (3.2 s). Notable and ambient stay silent
+   in GLANCE; THEATER's full ledger is unchanged; "ambient never ledgers" is preserved. Purpose:
+   keep gold meaningful in the corner view.
+3. **Ambient perceptibility floor.** A lone whisper now reads in THEATER (core-dot peak ≈ 0.52),
+   so a real event never renders as literally nothing. Bursts still coalesce (one pulse, no
+   strobe). GLANCE still lets whispers fade near to nothing. Evidence: `seq2_t4_lone_whisper_theater.png`.
+
+## I. v1.1 acceptance checklist results (P3–P4)
+
+Carried items 1–12 re-run on SEQ-001 (unchanged): `2 / 1 / 1`, gold only on the spine seal +
+residue, deterministic, no external network. New items on SEQ-002:
+
+| # | Item | Result | Evidence |
+|---|------|--------|----------|
+| 13 | Three weight tiers distinct; ambient never queues / blocks / golds | PASS | `ambientInQueue:false`; ambient routed direct, visual-only. v1.1-verify.json |
+| 14 | cron whispers (t56/t69) don't delay/interrupt the seal ceremony | PASS | ambient bypasses the queue; ceremony non-interruptible; SEQ-002 ends 1/1/1 |
+| 15 | logboss burst t23–t24.2 coalesces to one shimmer | PASS | `liveLogbossPulses:1, merged:3` |
+| 16 | forge_disc_created reforms Project Disc; no 4th disc | PASS | `discCount:3`; `seq2_t40_forgeform.png` |
+| 17 | help_opened is a transient gesture; no mode change | PASS | mode forge→forge across t72–t74 |
+| 18 | OFF halts loop; GLANCE one-line legible at 480×270; THEATER full; V cycles | PASS | `seq2_t61_glance_480x270.png`, `seq2_off_480x270.png` |
+| 19 | Two instances sync via BroadcastChannel over a served origin | PASS | localhost: pageB(broadcast) `hasDiamond:true`, `ledgerLen:11` matching pageA. v1.1-verify-p4.json |
+| 20 | Theater is never an input — clicking canvas changes no state | PASS | `clickNoState:true` (digest identical before/after two clicks) |
+| 21 | Gold only at seals on spine; dual counter; SEQ-002 ends 1/1/1; playback deterministic | PASS | end `1/1/1`; `deterministic:true` (broadcast/socket exempt by nature) |
+
+Verification: headless Chromium. Logic/digests at file:// (`docs/v1.1-verify.json`); served-origin
+checks (multi-mount, click, network) over `http://localhost` (`docs/v1.1-verify-p4.json`). Stills
+in `docs/v1.1-shots/`. Builder responsibility ends at the accepted artifact; no merge/tag/PR/deploy.

@@ -59,6 +59,9 @@
   body.i-glance .glance{opacity:1}
   body.i-glance #hud, body.i-glance #ledger{opacity:0}
   body.i-off #hud, body.i-off #ledger, body.i-off .glance{opacity:0}
+  .glance .gmode{color:var(--bright)}            /* mode word brightest — a glance lands on mode first */
+  .glance .gctr{color:var(--hud)}                /* counters a step quieter */
+  .glance .gecho{display:block;font-size:10px;letter-spacing:.18em;margin-bottom:5px}
 </style>
 </head>
 <body>
@@ -529,7 +532,13 @@ function ledger(ev){
   const e = ledgerEntry(ev); if(!e) return;
   // time string is the event's logical offset; addClock is live (drives fade-in)
   store.ledger.push({time:fmtTime(ev.t), label:e.label, color:e.color, addClock:clock});
+  // GLANCE ceremonial echo (ATD-003 P2 refinement): seal/registration only surface a single
+  // transient line in GLANCE so gold stays meaningful in the corner view. Notable/ambient stay
+  // silent in GLANCE; THEATER's full ledger is unchanged; "ambient never ledgers" is preserved.
+  if(CEREMONIAL_EVENTS.has(ev.event_type)) glanceEcho={label:e.label,color:e.color,t0:clock};
 }
+let glanceEcho=null;
+const T_GLANCE_ECHO=3.2;            // GLANCE ceremonial echo fade duration
 
 /* ============================================================================
    8. PLAYBACK CLOCK + UPDATE
@@ -537,14 +546,45 @@ function ledger(ev){
 let clock = 0, paused = false, lastFrame = performance.now(), fired = 0;
 function restart(){
   store = initStore(); queue=[]; active=null; lastDoneT=-1e9; clock=0; fired=0;
-  G.reform = {agenda:null,project:null,guild:null}; aura.init=false;
+  G.reform = {agenda:null,project:null,guild:null}; aura.init=false; glanceEcho=null;
+  publish({kind:'reset', script:activeSeq.script_id});   // keep broadcast mounts in sync
 }
 function loadScript(which){ activeSeq = (which==='2') ? SEQ_002 : SEQ; restart(); }
+
+/* ---- Event source adapter (ATD-003 §12): playback | broadcast | socket; one active ---- */
+let source='playback';
+(function(){ const q=new URLSearchParams(location.search).get('source');
+  if(q && ['playback','broadcast','socket'].includes(q)) source=q; })();
+let bc=null;
+function initSource(){
+  try{ bc=new BroadcastChannel('axis-theater'); }catch(e){ bc=null; }
+  if(bc) bc.onmessage=(m)=>{
+    if(source!=='broadcast') return;             // only broadcast mounts consume the stream
+    const d=m.data;
+    if(d.kind==='reset'){ activeSeq=(d.script==='SEQ-002')?SEQ_002:SEQ; restart(); }
+    else if(d.kind==='event'){ clock=d.clock; applyEvent(d.ev, clock); }
+  };
+}
+// playback is the source of truth: it publishes each fired event as the normalized §9.2
+// payload (+ weight + clock) so secondary broadcast mounts render in sync (F-C: served origin).
+function publish(msg){ if(bc && source==='playback'){ try{ bc.postMessage(msg); }catch(e){} } }
+// socket transport is a Phase-5 stub: message shape defined, no live server, not connected.
+function connectSocket(url){
+  // const ws=new WebSocket(url);
+  // ws.onmessage=(m)=>{ const ev=JSON.parse(m.data); applyEvent(ev, ev.clock!=null?ev.clock:clock); };
+  console.info('[socket] stub: expects ATD-001 §9.2 payload + weight (+clock). No server in v1.1.');
+  return null;
+}
+
 function update(){
-  // fire scripted events whose t has arrived
-  while(fired < activeSeq.events.length && activeSeq.events[fired].t <= clock){
-    applyEvent(activeSeq.events[fired], clock);
-    fired++;
+  // fire scripted events whose t has arrived — only the playback source runs the SEQ clock
+  if(source==='playback'){
+    while(fired < activeSeq.events.length && activeSeq.events[fired].t <= clock){
+      const ev=activeSeq.events[fired];
+      applyEvent(ev, clock);
+      publish({kind:'event', ev, clock});         // mirror to broadcast mounts
+      fired++;
+    }
   }
   updateQueue(clock);
   // mode transition: switch mode + start disc reform at the dim->reform boundary (section 6.1)
@@ -753,15 +793,19 @@ function ambientPos(target){
   const d=G.discs[target]; return d?{x:d.cx,y:d.cy}:{x:G.spineX,y:G.discs.project.cy};
 }
 function drawAmbient(){
-  const dim = isGlance()?0.45:1;                 // faint/coalesced in GLANCE (§11)
+  const gl=isGlance();
   for(let i=store.ambient.length-1;i>=0;i--){
     const p=store.ambient[i], age=clock-p.t0;
     if(age>T_AMBIENT_LIFE){ store.ambient.splice(i,1); continue; }
     const k=age/T_AMBIENT_LIFE, env=Math.sin(clamp(k,0,1)*Math.PI);  // soft rise and fall
     const pos=ambientPos(p.target), grow=Math.min(p.merged,4);
-    const a=env*0.20*dim;                          // low-luminance whisper
-    ell(pos.x,pos.y, lerp(4,14+3*grow,k), lerp(4,14,k)*FT, CYAN, a*0.7, 1, 6);
-    dot(pos.x,pos.y, 2.0, CYAN, a, 7);
+    // Perceptibility floor (P2 refinement): a lone whisper must read for a careful viewer in
+    // THEATER — a real event that renders as nothing is as dishonest as a fake one. Bursts still
+    // coalesce (one pulse), so they never strobe. GLANCE may let whispers fade near to nothing.
+    const ringA = env*0.16*(gl?0.45:1);
+    const coreA = env*(gl?0.30:0.52);
+    ell(pos.x,pos.y, lerp(4,14+3*grow,k), lerp(4,14,k)*FT, CYAN, ringA, 1, 6);
+    dot(pos.x,pos.y, 2.2, CYAN, coreA, 9);
   }
 }
 function drawPulses(){
@@ -950,8 +994,14 @@ function lrLines(){
 function updateHUD(){
   const m=MODE_HUD[store.mode]||MODE_HUD.free;
   const N=store.sealed_today, V=store.vaulted_today;
-  // GLANCE single status line (§11): mode + dual counter. Always kept current; shown via CSS.
-  elGlance.textContent = m.ul[0]+'  ·  SEALED: '+N+' / VAULTED: '+V;
+  // GLANCE single status line (§11): mode word brightest, counters quieter. Plus a transient
+  // ceremonial-only echo (P2 refinement). Always kept current; shown via CSS.
+  let echoHtml='';
+  if(glanceEcho){ const age=clock-glanceEcho.t0;
+    if(age>=0 && age<T_GLANCE_ECHO){ const op=(1-age/T_GLANCE_ECHO).toFixed(3);
+      echoHtml='<div class="gecho" style="opacity:'+op+';color:rgb('+glanceEcho.color+')">'+glanceEcho.label+'</div>'; } }
+  elGlance.innerHTML = echoHtml
+    +'<span class="gmode">'+m.ul[0]+'</span>  ·  <span class="gctr">SEALED: '+N+' / VAULTED: '+V+'</span>';
   if(intensity!=='theater') return;             // GLANCE/OFF: skip the full HUD projection
   elUL.innerHTML='<span class="ttl">A U R A</span>'
     +'<div class="v">'+m.ul[0]+'</div><div class="k">'+m.ul[1]+'</div>';
@@ -1015,7 +1065,24 @@ window.addEventListener('keydown',(e)=>{
   else if(k==='v'){ cycleIntensity(); }            // OFF / GLANCE / THEATER
   else if(k==='1'){ loadScript('1'); }             // SEQ-001 FIRST LIGHT
   else if(k==='2'){ loadScript('2'); }             // SEQ-002 LIVING CHAMBER
+  else if(k==='p'){ openPopout(); }                // popout (broadcast mount)
 });
+// Popout / Document Picture-in-Picture (ATD-003 §13). Multi-mount needs a served origin (F-C).
+async function openPopout(){
+  const url=location.pathname+'?intensity=theater&source=broadcast';
+  try{
+    if(window.documentPictureInPicture && window.isSecureContext){
+      const pip=await documentPictureInPicture.requestWindow({width:960,height:540});
+      pip.document.body.style.margin='0';
+      const f=pip.document.createElement('iframe');
+      f.src=url; f.style.cssText='border:0;width:100%;height:100%;display:block';
+      pip.document.body.appendChild(f);
+      return;
+    }
+  }catch(e){ /* fall through to a normal popout window */ }
+  window.open(url,'aura_popout','width=960,height=540');
+}
+initSource();
 applyIntensityClass();
 if(intensity==='off') paintVoid(); else startLoop();
 </script>
