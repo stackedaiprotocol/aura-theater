@@ -1,0 +1,40 @@
+{
+  "external": [],
+  "errors": [],
+  "warns": [],
+  "deterministic": true,
+  "state": {
+    "sealed": 2,
+    "vaulted": 1,
+    "marks": 1,
+    "mode": "build",
+    "diamonds": [
+      "white",
+      "registered"
+    ],
+    "ledger": [
+      "FREE MODE",
+      "AGENDA LOADED",
+      "PLAN MODE",
+      "PLANNER SEATED",
+      "ESTIMATOR SEATED",
+      "ESTIMATE FORMING",
+      "RELAY OPEN",
+      "ESTIMATE RESOLVED",
+      "PLAN PROPOSAL",
+      "AWAITING CONFIRMATION",
+      "PLAN CONFIRMED",
+      "BUILD MODE",
+      "BUILDER SEATED",
+      "BUILD CHAIN FORMING",
+      "CLASSIFICATION NOTE",
+      "BUILD CHAIN RESOLVED",
+      "ITEM PROPOSED",
+      "AWAITING CONFIRMATION",
+      "ITEM SEALED",
+      "REGISTERED",
+      "ESTIMATOR RELEASED",
+      "HOLD"
+    ]
+  }
+}
