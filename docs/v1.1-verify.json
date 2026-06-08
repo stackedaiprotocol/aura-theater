@@ -1,0 +1,52 @@
+{
+  "external": [],
+  "errors": [],
+  "seq1": {
+    "sealed": 2,
+    "vaulted": 1,
+    "marks": 1,
+    "diamonds": [
+      "white",
+      "registered"
+    ],
+    "mode": "build"
+  },
+  "seq2": {
+    "coalesce": {
+      "liveLogbossPulses": 1,
+      "merged": 3
+    },
+    "ambientInQueue": false,
+    "modeBeforeHelp": "forge",
+    "modeAfterHelp": "forge",
+    "end": {
+      "sealed": 1,
+      "vaulted": 1,
+      "marks": 1,
+      "diamonds": [
+        "registered"
+      ],
+      "mode": "forge",
+      "discCount": 3,
+      "ledgerHasAmbient": false,
+      "ledgerLabels": [
+        "FREE MODE",
+        "PLAN MODE",
+        "PROJECT LOADED",
+        "PLANNER SEATED",
+        "FORGE MODE",
+        "SIM-A STARTED",
+        "SIM RESOLVED",
+        "FORGE FORM",
+        "SYNTHESIS FORMING",
+        "SYNTHESIS RESOLVED",
+        "FORGE OUTPUT",
+        "AWAITING CONFIRMATION",
+        "FORGE CONFIRMED",
+        "REGISTERED",
+        "HOLD"
+      ]
+    }
+  },
+  "deterministic": true
+}

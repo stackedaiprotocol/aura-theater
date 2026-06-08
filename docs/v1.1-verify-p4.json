@@ -1,0 +1,17 @@
+{
+  "servedOrigin": "http://localhost:8137/aura_theater_v1.html",
+  "external": [],
+  "errors": [],
+  "clickNoState": true,
+  "deterministic": true,
+  "multiMount": {
+    "broadcastSource": "broadcast",
+    "pageB": {
+      "source": "broadcast",
+      "mode": "free",
+      "hasDiamond": true,
+      "ledgerLen": 11,
+      "sealedSeen": 0
+    }
+  }
+}
