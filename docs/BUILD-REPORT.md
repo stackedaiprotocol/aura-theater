@@ -109,3 +109,31 @@ and committed verbatim to `docs/`):
   t80_8 (gold on spine, diamond white).
 
 RevD is retained in `docs/` as superseded lineage; RevE is the current governing law.
+
+---
+
+# v1.1 INCREMENT — ATD-003 RevC (Integration Doctrine)
+
+Governing: ATD-001 RevE + ATD-002 RevB (sealed) + ATD-003 RevC (sealed by this commit).
+Working branch: `claude/youthful-ramanujan-A2inC` (continues accepted v1.0 `f5d8c12`).
+
+## G. Authorizations and rulings (recorded BEFORE the v1.1 run)
+
+- **Branch (F-A):** v1.1 continues on `claude/youthful-ramanujan-A2inC` — the lawful fallback,
+  since v1.0 is not yet sealed to `main`. The Builder does not create branches or merge to
+  `main` without explicit Human Architect authorization.
+- **Gate consolidation (§15 / §10.1):** Human Architect authorized building **P1→P2
+  continuously, stop-and-present after P2** (GLANCE legibility judgment), then **P3→P4
+  continuously**. Recorded here before the run; momentum is not authorization, this ruling is.
+- **G1 (sim_completed):** RevC adopts the law-forced default — `sim_completed` resolves to
+  **cyan and holds, awaiting confirmation** (identical to `glyph_resolved`). White only via a
+  seal. Implemented accordingly.
+- **F-B:** deliverable remains `aura_theater_v1.html`; artifact version lives in the build string.
+- **F-C:** from-disk = single-mount playback; multi-mount sync + Document PiP verified over a
+  served origin (local http) only.
+- **Build string:** Lower-Left changes from `BUILD: ATD-002 v1.1` to `BUILD: AURA THEATER v1.1`
+  (§8) — the build string now names the artifact, not the brief; supersedes the E1 coupling.
+
+## H. v1.1 acceptance checklist results
+
+To be completed at P4 (carried 1–12 plus new 13–21). Results recorded after verification.
