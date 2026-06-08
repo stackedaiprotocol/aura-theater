@@ -1,6 +1,7 @@
 # BUILD REPORT — Aura Theater Event Playback MVP (ATD-002 RevB)
 
-Builder: Claude Code. Governing law: ATD-001 RevD. Build brief: ATD-002 RevB (sealed).
+Builder: Claude Code. Governing law: ATD-001 RevE (supersedes RevD; adds ATD-A7 gate
+locus doctrine). Build brief: ATD-002 RevB (sealed).
 Working branch: `claude/youthful-ramanujan-A2inC`. Deliverable: `aura_theater_v1.html`.
 
 This report records authorizations, deviations, and flag resolutions. Per ATD-002 §1 / §2,
@@ -78,17 +79,33 @@ visual beats captured to `docs/p5-shots/`; machine report at `docs/p5-verify.jso
 | 6 | Private events: full choreography, generic ledger labels | PASS | `ITEM PROPOSED` / `ITEM SEALED` shown for the private diamond_002 events; `BUILD OUTPUT` never appears in the ledger (p5-verify.json). |
 | 7 | Mark persists; HUD SEALED:2 / VAULTED:1; 1 mark; VAULTED==marks always | PASS | Digest: sealed 2, vaulted 1, marks 1. VAULTED and mark count both increment only at descent completion. Shot t92. |
 | 8 | Mode transitions dim T_DIM then reform T_REFORM; no silent transitions | PASS | `modeTransition` queues dim (T_DIM) + reform (T_REFORM) with dim overlay; mode/disc switch at the boundary. |
-| 9 | Gate glyph visuals appear on the spine only | PASS (by interpretation) | No discrete GATE-family glyph symbol is drawn off-spine. The Confirmation Seal is rendered on the diamond per §8.1 (the diamond brightens, a ring closes around it, the spine brightens); the Registration gate runs on the spine (descent). See note below. |
+| 9 | Gate glyph visuals appear on the spine only | PASS | Per ATD-A7 (RevE): the gold pulse is a gate-channel signal and fires on the spine (full-length gold tint + a gold gate node at the spine's heart). The diamond receives only white stabilization + a white ring; it emits no gold. The Register gate runs on the spine (descent). Shots t47_8, t80_8. |
 | 10 | state_hold leaves the chamber fully structured; nothing decays | PASS | Hold is the default; t92 holds indefinitely. Shot t92. |
 | 11 | Runs from disk, no network, 1920x1080 OBS browser source | PASS | `external: []` (request interception aborted any non-file/data URL); renders full-frame at 1920x1080. |
 | 12 | Restart reproduces identical ceremony (determinism) | PASS | Independent replays produce an identical state digest; no `Math.random()` anywhere in the file (only the comment naming the prohibition). |
 
-Note on item 9: ATD-001 §5.4 places the GATE family on the spine only, while §8.1
-mandates the seal visuals at the diamond (brighten, ring closes around it). This build
-renders the §8.1 ceremony at the diamond and never draws a separate gate-family glyph
-symbol off the spine; the Register gate runs entirely on the spine. Flagged here for the
-record rather than inferred silently.
-
 Builder responsibility ends at the tagged, accepted artifact (§12). Deployment to
 `aura.scrollschool.io/theater/` (cPanel `public_html/theater/index.html`) is the Human
 Architect's step; no Builder deploy action taken.
+
+## F. Post-P5 amendment — ATD-A7 gate locus doctrine (ATD-001 RevE)
+
+The P5 candidate flagged a tension between §5.4 (gate glyphs on the spine only) and §8.1
+(seal acts on the diamond), and rendered the gold pulse at the diamond as one defensible
+reading. The Human Architect ruled the question via **ATD-001 RevE / ATD-A7**: a gate
+glyph and the gold pulse are gate-channel signals that render on the spine only; a
+ceremony may act on its subject at the subject's location, but that effect is white
+stabilization, never gold. "Confirmation comes to the work; gold belongs to the gate."
+
+Build updated to comply (no doc alteration by Builder — RevE supplied by the design lead
+and committed verbatim to `docs/`):
+- The seal gold pulse now fires on the **spine**: a full-length gold tint plus a gold gate
+  node at the spine's heart (`drawSpine`).
+- The diamond's seal visual is now **white only** — white stabilization + a white ring
+  closure; the diamond emits no gold (`drawDiamonds`, sealing stage).
+- Re-verified headless: gold appears only during the two seal pulses (on the spine) and as
+  foundation residue; diamonds hold white; all other invariants unchanged
+  (SEALED 2 / VAULTED 1 / 1 mark, deterministic, no network). Evidence: shots t47_8 and
+  t80_8 (gold on spine, diamond white).
+
+RevD is retained in `docs/` as superseded lineage; RevE is the current governing law.

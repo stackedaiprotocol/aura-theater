@@ -478,10 +478,11 @@ function label(x,y,txt,c,a){
 
 // ---- Spine (section 4.1): cyan base, white at seal, purple descent ----
 function drawSpine(){
-  let whiteAmt=0, descend=null;
+  let whiteAmt=0, descend=null, goldPulse=0;
   for(const dm of store.diamonds){
     if(dm.stage==='sealing'){ const p=clamp((clock-dm.sealT)/T_SEAL,0,1);
-      whiteAmt=Math.max(whiteAmt, Math.sin(clamp(p/0.55,0,1)*Math.PI*0.85)); }
+      whiteAmt=Math.max(whiteAmt, Math.sin(clamp(p/0.55,0,1)*Math.PI*0.85));
+      goldPulse=Math.max(goldPulse, Math.max(0,Math.sin(clamp((p-0.45)/0.4,0,1)*Math.PI))); }
     if(dm.stage==='descending') descend=dm;
   }
   const multi = 0.04*breath(clock);
@@ -496,6 +497,21 @@ function drawSpine(){
   ctx.strokeStyle=g; ctx.lineWidth=1.1;
   ctx.beginPath(); ctx.moveTo(G.spineX,G.spineTop); ctx.lineTo(G.spineX,G.spineBot); ctx.stroke();
   ctx.restore();
+  // ATD-A7 (gate locus): the gold pulse is a gate-channel signal. It fires on the SPINE,
+  // never on the diamond. The gate node fires at the spine's heart. Gold appears here only.
+  if(goldPulse>0.01){
+    const gg=ctx.createLinearGradient(0,G.spineTop,0,G.spineBot);
+    gg.addColorStop(0,   rgba(GOLD,0));
+    gg.addColorStop(0.5, rgba(GOLD,0.5*goldPulse));
+    gg.addColorStop(1,   rgba(GOLD,0));
+    ctx.save(); ctx.shadowColor=rgba(GOLD,goldPulse); ctx.shadowBlur=14*goldPulse;
+    ctx.strokeStyle=gg; ctx.lineWidth=1.6;
+    ctx.beginPath(); ctx.moveTo(G.spineX,G.spineTop); ctx.lineTo(G.spineX,G.spineBot); ctx.stroke();
+    ctx.restore();
+    const gy=(G.spineTop+G.spineBot)/2;
+    dot(G.spineX,gy,3.4,GOLD,goldPulse,18*goldPulse);
+    dot(G.spineX,gy,1.5,WHITE,0.9*goldPulse,10);
+  }
   if(descend){
     const p=easeInOutSine(clamp((clock-descend.descT)/T_DESCENT,0,1));
     const y0=G.discs[descend.disc].cy - G.S*0.045, y1=G.foundation.cy;
@@ -662,14 +678,14 @@ function drawDiamonds(){
       if(isAnticipating(dm)) fa*=(0.6+0.4*breath(clock));   // anticipation breath overlay
       diamond(home.x,home.y,sz,rot,WHITE,fa*0.22,fa,10*fa);
     } else if(dm.stage==='sealing'){
+      // ATD-A7: confirmation comes to the work as WHITE stabilization + a WHITE ring.
+      // The diamond never emits gold; the gold pulse fires on the spine (see drawSpine).
       const p=clamp((clock-dm.sealT)/T_SEAL,0,1);
       const white=easeInOutSine(clamp(p/0.4,0,1));
       const ringP=easeOutCubic(clamp(p/0.6,0,1));
       const ringR=lerp(G.S*0.055,sz*2.2,ringP);
-      ell(home.x,home.y,ringR,ringR,WHITE,(1-ringP)*0.55+0.2,1.4,8);     // ring closes
-      diamond(home.x,home.y,sz,rot,WHITE,0.32*white,0.95,12);
-      const gp=Math.max(0,Math.sin(clamp((p-0.45)/0.4,0,1)*Math.PI));     // single gold pulse
-      if(gp>0.01){ diamond(home.x,home.y,sz*1.1,rot,GOLD,0.4*gp,gp,16); dot(home.x,home.y,sz*0.4,GOLD,gp,18*gp); }
+      ell(home.x,home.y,ringR,ringR,WHITE,(1-ringP)*0.55+0.2,1.4,8);     // white ring closes
+      diamond(home.x,home.y,sz,rot,WHITE,0.32*white,0.6+0.4*white,12);
     } else if(dm.stage==='white'){
       const br=0.88+0.12*Math.sin(clock*1.5+dm.seed);
       diamond(home.x,home.y,sz,rot,WHITE,0.30,0.95*br,12);
