@@ -62,6 +62,33 @@ Explicitly NOT carried (would violate the brief):
 - `surfaceSignal` has no duration in the §4 timing table; a local fade constant is used for the
   amber surfacing only. Recorded here as a render detail, not a new governance constant.
 
-## E. Acceptance checklist results
+## E. Acceptance checklist results (P5)
 
-To be completed at P5 (see §10). Results recorded here after the full SEQ-001 verification run.
+Verified against full SEQ-001 playback in headless Chromium (puppeteer-core +
+@sparticuz/chromium) at 1920x1080. Logic invariants asserted programmatically;
+visual beats captured to `docs/p5-shots/`; machine report at `docs/p5-verify.json`.
+
+| # | Item | Result | Evidence |
+|---|------|--------|----------|
+| 1 | Glance Test (mode / cast / lifecycle in <5s) | PASS | Mode in HUD + active-disc emphasis; labeled saucers at seats; diamond lifecycle flicker→white→gold→purple→mark. Shots t01,t21,t47,t85,t92. Final human Glance Test is the standing acceptance test. |
+| 2 | Gold seal-pulse fires exactly twice, nowhere else | PASS | Gold drawn only in the seal ceremony bump (t46, t79 ceremonies) + residue marks (residue, not a source). t47_8/t81_9 shots show the two pulses. |
+| 3 | No cyan→white without a seal ledger entry | PASS | Craft glyphs hold cyan/resolved; only `runSeal` turns a diamond white and it logs SEALED. |
+| 4 | Anticipation windows breathe, held white, zero busywork | PASS | `breath()` on period T_ANTIC_PERIOD over awaiting diamond + Aura; held geometry persists. Shots t40 (and t73). |
+| 5 | Exactly one transition at a time; bursts queue | PASS | Single active queue item + T_QUEUE_GAP; no overlap, no warnings logged. |
+| 6 | Private events: full choreography, generic ledger labels | PASS | `ITEM PROPOSED` / `ITEM SEALED` shown for the private diamond_002 events; `BUILD OUTPUT` never appears in the ledger (p5-verify.json). |
+| 7 | Mark persists; HUD SEALED:2 / VAULTED:1; 1 mark; VAULTED==marks always | PASS | Digest: sealed 2, vaulted 1, marks 1. VAULTED and mark count both increment only at descent completion. Shot t92. |
+| 8 | Mode transitions dim T_DIM then reform T_REFORM; no silent transitions | PASS | `modeTransition` queues dim (T_DIM) + reform (T_REFORM) with dim overlay; mode/disc switch at the boundary. |
+| 9 | Gate glyph visuals appear on the spine only | PASS (by interpretation) | No discrete GATE-family glyph symbol is drawn off-spine. The Confirmation Seal is rendered on the diamond per §8.1 (the diamond brightens, a ring closes around it, the spine brightens); the Registration gate runs on the spine (descent). See note below. |
+| 10 | state_hold leaves the chamber fully structured; nothing decays | PASS | Hold is the default; t92 holds indefinitely. Shot t92. |
+| 11 | Runs from disk, no network, 1920x1080 OBS browser source | PASS | `external: []` (request interception aborted any non-file/data URL); renders full-frame at 1920x1080. |
+| 12 | Restart reproduces identical ceremony (determinism) | PASS | Independent replays produce an identical state digest; no `Math.random()` anywhere in the file (only the comment naming the prohibition). |
+
+Note on item 9: ATD-001 §5.4 places the GATE family on the spine only, while §8.1
+mandates the seal visuals at the diamond (brighten, ring closes around it). This build
+renders the §8.1 ceremony at the diamond and never draws a separate gate-family glyph
+symbol off the spine; the Register gate runs entirely on the spine. Flagged here for the
+record rather than inferred silently.
+
+Builder responsibility ends at the tagged, accepted artifact (§12). Deployment to
+`aura.scrollschool.io/theater/` (cPanel `public_html/theater/index.html`) is the Human
+Architect's step; no Builder deploy action taken.

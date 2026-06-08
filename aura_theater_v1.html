@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AURA THEATER — SEQ-001 FIRST LIGHT</title>
+<!--
+  Aura Theater Event Playback MVP — aura_theater_v1.html
+  Governed by ATD-001 RevD (design law) and ATD-002 RevB (sealed build brief).
+  Single self-contained file. No backend, no build tooling, no external deps.
+  Runs from disk and as a 1920x1080 OBS browser source.
+
+  Architecture (ATD-002 section 8 / ATD-001 section 13), strict separation:
+    SCRIPT JSON -> EVENT INTERPRETER -> STATE STORE <- RENDER LOOP
+                         |                                ^
+                         v                                |
+                  CHOREOGRAPHY QUEUE  -------------------- +
+
+  Determinism law (ATD-A6 / section 3.4): all instability, flicker, breathing and
+  drift is a function of the playback clock via layered sines. No Math.random()
+  appears anywhere in this file. Restart reproduces the identical ceremony.
+-->
+<style>
+  :root{
+    --void:#05070d;
+    --hud:#8fb8cc; --dim:#3f5a68; --bright:#dff0f7;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;background:var(--void);overflow:hidden}
+  #c{display:block;width:100vw;height:100vh}
+  .hud,.ledger{position:fixed;font-family:ui-monospace,"SF Mono","Courier New",monospace;
+    font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--hud);
+    pointer-events:none;transition:opacity .35s}
+  .hud{inset:0}
+  .corner{position:absolute;width:34px;height:34px;border:1px solid var(--dim);opacity:.7}
+  .tl{top:22px;left:22px;border-right:none;border-bottom:none}
+  .tr{top:22px;right:22px;border-left:none;border-bottom:none}
+  .bl{bottom:22px;left:22px;border-right:none;border-top:none}
+  .br{bottom:22px;right:22px;border-left:none;border-top:none}
+  .ul{position:absolute;top:30px;left:64px;line-height:2.0}
+  .ur{position:absolute;top:30px;right:64px;text-align:right;line-height:2.0}
+  .ll{position:absolute;bottom:30px;left:64px;line-height:1.9}
+  .lr{position:absolute;bottom:30px;right:64px;text-align:right;line-height:1.9}
+  .ledger{right:64px;top:50%;transform:translateY(-50%);text-align:right;line-height:2.15;width:280px}
+  .ttl{color:var(--bright);letter-spacing:.30em;font-weight:600;font-size:13px;display:block}
+  .sub{color:var(--dim);font-size:10px;letter-spacing:.22em}
+  .k{color:var(--dim)} .v{color:var(--hud)}
+  .off{opacity:0 !important}
+  #paused{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+    font-family:ui-monospace,monospace;font-size:12px;letter-spacing:.4em;color:var(--dim);
+    text-transform:uppercase;pointer-events:none;opacity:0;transition:opacity .25s}
+  #paused.show{opacity:1}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="hud" id="hud">
+  <div class="corner tl"></div><div class="corner tr"></div>
+  <div class="corner bl"></div><div class="corner br"></div>
+  <div class="ul" id="ul"></div>
+  <div class="ur" id="ur"></div>
+  <div class="ll" id="ll"></div>
+  <div class="lr" id="lr"></div>
+</div>
+<div class="ledger" id="ledger"></div>
+<div id="paused">PAUSED</div>
+
+<script>
+"use strict";
+/* ============================================================================
+   1. CONSTANTS  (ATD-002 sections 3.4, 4)
+   ========================================================================== */
+const TAU = 6.283185307179586;
+const FT  = 0.30;                 // ellipse vertical squash (section 3.1)
+
+// Color tokens (section 3.4) as "r,g,b" strings
+const VOID   = '#05070d';
+const WHITE  = '223,240,247';
+const CYAN   = '159,212,232';
+const GOLD   = '244,213,141';
+const PURPLE = '178,148,232';
+const AMBER  = '232,178,102';
+const FAULT  = '220,80,80';       // reserved, unused in v1 script
+
+// Timing table (section 4) — seconds, named exactly as specified
+const T_DIM         = 1.2;
+const T_REFORM      = 3.5;
+const T_ARRIVE      = 2.4;
+const T_DEPART      = 2.0;
+const T_GLYPH_FORM  = 1.5;
+const T_RELAY       = 1.8;
+const T_SEAL        = 2.8;
+const T_DESCENT     = 4.5;
+const T_ANTIC_PERIOD= 5.0;
+const T_QUEUE_GAP   = 0.4;
+const T_LEDGER_FADE = 0.6;
+const T_SIGNAL      = 1.2;         // amber surfacing fade (render detail; see BUILD-REPORT D)
+const T_MARK_SETTLE = 2.0;         // foundation mark settle decay (section 6.3)
+
+/* ============================================================================
+   2. MATH / EASING / DETERMINISTIC INSTABILITY  (no RNG anywhere)
+   ========================================================================== */
+const clamp = (v,a,b)=> v<a?a:(v>b?b:v);
+const lerp  = (a,b,p)=> a+(b-a)*p;
+const easeInOutSine = t=> 0.5-0.5*Math.cos(Math.PI*clamp(t,0,1));   // loop's easeIO
+const easeOutCubic  = t=> 1-Math.pow(1-clamp(t,0,1),3);
+const damp  = (a,b,l,dt)=> b+(a-b)*Math.exp(-l*dt);                 // lineage util (unused; kept for parity)
+
+// Flicker = alpha instability on the WHITE token (ATD-A6). Layered sines of clock.
+function flickerAlpha(t,seed){
+  const a = 0.62 + 0.20*Math.sin(t*6.7+seed)
+                 + 0.11*Math.sin(t*15.3+seed*2.3)
+                 + 0.07*Math.sin(t*27.1+seed*4.1);
+  return clamp(a,0.30,1);
+}
+// Slow anticipation breath: one pulse per T_ANTIC_PERIOD (section 7.1)
+const breath = t=> 0.5+0.5*Math.sin(TAU*t/T_ANTIC_PERIOD);
+
+/* ============================================================================
+   3. STATE STORE  (ATD-001 section 10.1, verbatim + ATD-A5 dual counter)
+   The only mutable object. Mutated only by the event interpreter / choreography.
+   ========================================================================== */
+function initStore(){
+  return {
+    mode:'free',
+    transition:null,
+    anticipation:{active:false,subject_id:null,since:null},
+    active_disc:'agenda',
+    agenda:null,
+    project:null,
+    seats:[null,null,null,null,null,null],
+    aura_state:'idle',
+    diamonds:[],
+    glyphs:[],
+    relays:[],
+    signals:[],
+    foundation_marks:[],
+    ledger:[],
+    sealed_today:0,
+    vaulted_today:0,
+    // render-only derived flags (still pure functions of events)
+    sealing:false,
+    registering:false,
+    everRegistered:false,
+    held:false
+  };
+}
+let store = initStore();
+
+/* ============================================================================
+   4. THE FIRST PLAYBACK SCRIPT  (ATD-002 section 7) — SEQ-001 FIRST LIGHT
+   ========================================================================== */
+const SEQ = {
+  "script_id":"SEQ-001","title":"FIRST LIGHT",
+  "events":[
+    { "t":0.0,  "event_type":"mode_entered",      "mode":"free",  "subject_id":"system",          "visibility":"public" },
+    { "t":5.0,  "event_type":"agenda_loaded",     "mode":"free",  "subject_id":"agenda_001",      "visibility":"public", "label":"SS-OPS-0607" },
+    { "t":10.0, "event_type":"mode_entered",      "mode":"plan",  "subject_id":"system",          "visibility":"public" },
+    { "t":16.0, "event_type":"graduate_invoked",  "mode":"plan",  "subject_id":"planner",         "visibility":"public", "seat":"S2" },
+    { "t":20.0, "event_type":"graduate_invoked",  "mode":"plan",  "subject_id":"estimator",       "visibility":"public", "seat":"S3" },
+    { "t":24.0, "event_type":"glyph_loaded",      "mode":"plan",  "subject_id":"glyph_estimate",  "visibility":"public", "disc":"agenda", "family":"craft" },
+    { "t":28.5, "event_type":"relay_activated",   "mode":"plan",  "subject_id":"relay_001",       "visibility":"public", "from":"planner", "to":"estimator" },
+    { "t":31.0, "event_type":"glyph_resolved",    "mode":"plan",  "subject_id":"glyph_estimate",  "visibility":"public" },
+    { "t":34.0, "event_type":"proposal_formed",   "mode":"plan",  "subject_id":"diamond_001",     "visibility":"public", "disc":"agenda", "label":"PLAN PROPOSAL" },
+    { "t":37.0, "event_type":"awaiting_human",    "mode":"plan",  "subject_id":"diamond_001",     "visibility":"public" },
+    { "t":46.0, "event_type":"seal_completed",    "mode":"plan",  "subject_id":"diamond_001",     "visibility":"public", "actor":"human_architect", "label":"PLAN CONFIRMED" },
+    { "t":50.0, "event_type":"mode_entered",      "mode":"build", "subject_id":"system",          "visibility":"public" },
+    { "t":56.0, "event_type":"graduate_invoked",  "mode":"build", "subject_id":"builder",         "visibility":"public", "seat":"S1" },
+    { "t":59.5, "event_type":"glyph_loaded",      "mode":"build", "subject_id":"glyph_build_chain","visibility":"public", "disc":"project", "family":"craft" },
+    { "t":64.0, "event_type":"zero_seat_surfaced","mode":"build", "subject_id":"signal_001",      "visibility":"public", "label":"CLASSIFICATION NOTE" },
+    { "t":67.0, "event_type":"glyph_resolved",    "mode":"build", "subject_id":"glyph_build_chain","visibility":"public" },
+    { "t":70.0, "event_type":"proposal_formed",   "mode":"build", "subject_id":"diamond_002",     "visibility":"private","disc":"project", "label":"BUILD OUTPUT" },
+    { "t":72.5, "event_type":"awaiting_human",    "mode":"build", "subject_id":"diamond_002",     "visibility":"public" },
+    { "t":79.0, "event_type":"seal_completed",    "mode":"build", "subject_id":"diamond_002",     "visibility":"private","actor":"human_architect" },
+    { "t":83.0, "event_type":"vault_registered",  "mode":"build", "subject_id":"diamond_002",     "visibility":"public" },
+    { "t":90.0, "event_type":"graduate_released", "mode":"build", "subject_id":"estimator",       "visibility":"public", "seat":"S3" },
+    { "t":92.0, "event_type":"state_hold",        "mode":"build", "subject_id":"system",          "visibility":"public" }
+  ]
+};
+
+/* ============================================================================
+   5. GEOMETRY  (ATD-002 section 3.1, 3.2) — normalized, rebuilt on resize
+   ========================================================================== */
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+let G = {};
+const SEAT_DEF = [               // section 3.2 (angle deg CCW from +x, default occupant)
+  {seat:'S1',ang:330,name:'BUILDER'},
+  {seat:'S2',ang:30, name:'PLANNER'},
+  {seat:'S3',ang:90, name:'ESTIMATOR'},
+  {seat:'S4',ang:150,name:'RISK'},
+  {seat:'S5',ang:210,name:'SCRIBE'},
+  {seat:'S6',ang:270,name:'RESERVED'}
+];
+const NAME_OF = {planner:'PLANNER',estimator:'ESTIMATOR',builder:'BUILDER',risk_analyst:'RISK',scribe:'SCRIBE'};
+const PRIMARY_DISC = {free:'agenda',plan:'agenda',forge:'project',meeting:'guild',build:'project'};
+
+function disc(cx,cy,rx){ return {cx,cy,rx,ry:rx*FT}; }
+function resize(){
+  const DPR = Math.min(window.devicePixelRatio||1, 2);
+  const W = window.innerWidth, H = window.innerHeight, S = Math.min(W,H);
+  cv.width = W*DPR; cv.height = H*DPR;
+  cv.style.width = W+'px'; cv.style.height = H+'px';
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  G = {
+    W,H,S,
+    spineX:0.50*W, spineTop:0.18*H, spineBot:0.86*H,
+    aura:{x:0.50*W, y:0.14*H, drift:0.015*S},
+    discs:{
+      agenda: disc(0.50*W,0.30*H,0.15*S),
+      project:disc(0.50*W,0.50*H,0.19*S),
+      guild:  disc(0.50*W,0.70*H,0.23*S)
+    },
+    foundation: disc(0.50*W,0.86*H,0.13*S),
+    seats:[], reform:{agenda:null,project:null,guild:null}
+  };
+  const gd = G.discs.guild;
+  for(const s of SEAT_DEF){
+    const a = s.ang*Math.PI/180;
+    G.seats.push({x:gd.cx+Math.cos(a)*gd.rx, y:gd.cy+Math.sin(a)*gd.rx*FT, name:s.name});
+  }
+  // preserve in-flight reform timers across resize
+  G.reform = resize._reform || {agenda:null,project:null,guild:null};
+}
+window.addEventListener('resize', ()=>{ resize._reform = G.reform; resize(); });
+resize();
+
+/* ============================================================================
+   6. CHOREOGRAPHY QUEUE  (ATD-002 section 8.3)
+   FIFO, single active transition, T_QUEUE_GAP between completions.
+   Ceremonies are non-interruptible. Anticipation is NOT queued (held state).
+   ========================================================================== */
+let queue = [], active = null, lastDoneT = -1e9;
+function enqueue(item){ queue.push(item); }           // {dur,onStart,onDone}
+function updateQueue(clock){
+  if(active && clock >= active._start + active.dur){
+    if(active.onDone) active.onDone();
+    active = null; lastDoneT = clock;
+  }
+  if(!active && queue.length && clock >= lastDoneT + T_QUEUE_GAP){
+    active = queue.shift();
+    active._start = clock;
+    if(active.onStart) active.onStart(clock);
+  }
+}
+
+/* ============================================================================
+   7. EVENT INTERPRETER  (ATD-002 section 8.1) — the only writer
+   Validates against the section 9.1 dictionary; rejects out-of-grammar events.
+   ========================================================================== */
+const DICT = new Set(['mode_entered','agenda_loaded','project_loaded','graduate_invoked',
+  'graduate_released','glyph_loaded','glyph_resolved','relay_activated','relay_resolved',
+  'proposal_formed','awaiting_human','seal_completed','vault_registered','zero_seat_surfaced',
+  'state_hold','fault']);
+
+const findDiamond = id => store.diamonds.find(d=>d.id===id);
+const seatIndex   = s  => 'S123456'.indexOf(s[1]) >=0 ? (parseInt(s[1],10)-1) : -1;
+const seatPosById = id => { for(let i=0;i<6;i++){const g=store.seats[i]; if(g&&g.id===id) return G.seats[i];} return null; };
+
+function applyEvent(ev, clock){
+  if(!DICT.has(ev.event_type)){ console.warn('[reject] unknown event_type', ev); return; }
+  if(!ev.subject_id){ console.warn('[reject] missing subject_id', ev); return; }
+
+  switch(ev.event_type){
+    case 'mode_entered':
+      enqueue({ dur:T_DIM+T_REFORM,
+        onStart:(c)=>{ store.transition={toMode:ev.mode, start:c, switched:false}; },
+        onDone:()=>{ store.transition=null; } });
+      ledger(ev); break;
+
+    case 'agenda_loaded':
+      store.agenda = ev.label || ev.subject_id;
+      enqueue({ dur:T_REFORM,
+        onStart:(c)=>{ store.active_disc='agenda'; G.reform.agenda=c; } });
+      ledger(ev); break;
+
+    case 'project_loaded':
+      store.project = ev.label || ev.subject_id;
+      enqueue({ dur:T_REFORM,
+        onStart:(c)=>{ store.active_disc='project'; G.reform.project=c; } });
+      ledger(ev); break;
+
+    case 'graduate_invoked': {
+      const idx = seatIndex(ev.seat||'');
+      if(idx<0){ console.warn('[reject] invalid seat', ev); return; }
+      const name = NAME_OF[ev.subject_id] || ev.subject_id.toUpperCase();
+      enqueue({ dur:T_ARRIVE,
+        onStart:(c)=>{ store.seats[idx]={id:ev.subject_id,name,seat:idx,state:'arriving',t0:c};
+                       store.aura_state='witnessing'; },
+        onDone:()=>{ if(store.seats[idx]) store.seats[idx].state='docked'; } });
+      ledger(ev); break;
+    }
+    case 'graduate_released': {
+      const idx = seatIndex(ev.seat||'');
+      if(idx<0 || !store.seats[idx]){ console.warn('[reject] release of empty seat', ev); return; }
+      enqueue({ dur:T_DEPART,
+        onStart:(c)=>{ store.seats[idx].state='departing'; store.seats[idx].t0=c; },
+        onDone:()=>{ store.seats[idx]=null; } });
+      ledger(ev); break;
+    }
+    case 'glyph_loaded': {
+      const dsc = ev.disc||'agenda';
+      enqueue({ dur:T_GLYPH_FORM,
+        onStart:(c)=>{ store.glyphs.push({id:ev.subject_id,disc:dsc,state:'forming',t0:c}); },
+        onDone:()=>{ const g=store.glyphs.find(g=>g.id===ev.subject_id); if(g) g.state='active'; } });
+      ledger(ev); break;
+    }
+    case 'glyph_resolved': {                 // immediate: cyan holds, awaiting gate (section 9.1)
+      const g = store.glyphs.find(g=>g.id===ev.subject_id);
+      if(g) g.state='resolved';
+      ledger(ev); break;
+    }
+    case 'relay_activated':
+      enqueue({ dur:T_RELAY,
+        onStart:(c)=>{ store.relays.push({id:ev.subject_id,from:ev.from,to:ev.to,t0:c}); },
+        onDone:()=>{ store.relays = store.relays.filter(r=>r.id!==ev.subject_id); } });
+      ledger(ev); break;
+
+    case 'relay_resolved':
+      store.relays = store.relays.filter(r=>r.id!==ev.subject_id);
+      ledger(ev); break;
+
+    case 'proposal_formed': {                // immediate: a diamond appears in flicker state
+      const dsc = ev.disc||store.active_disc;
+      store.diamonds.push({id:ev.subject_id,disc:dsc,label:ev.label,visibility:ev.visibility,
+        stage:'flicker',formT:clock,seed:store.diamonds.length*1.7+0.3});
+      ledger(ev); break;
+    }
+    case 'awaiting_human':                    // held state, NOT queued (section 8.3)
+      store.anticipation={active:true,subject_id:ev.subject_id,since:clock};
+      store.aura_state='anticipating';
+      ledger(ev); break;
+
+    case 'seal_completed': {                  // Ceremony 8.1 — only producer of gold
+      const dm = findDiamond(ev.subject_id);
+      if(!dm || !(dm.stage==='flicker'||dm.stage==='cyan')){
+        console.warn('[reject] out-of-grammar seal (diamond not in flicker/cyan lineage)', ev); return; }
+      store.anticipation={active:false,subject_id:null,since:null};
+      enqueue({ dur:T_SEAL,
+        onStart:(c)=>{ dm.stage='sealing'; dm.sealT=c; store.sealing=true;
+                       store.sealed_today++; store.aura_state='sealing'; },
+        onDone:()=>{ dm.stage='white'; store.sealing=false; store.aura_state='witnessing';
+                     ledger(ev); } });   // ledger SEALED is the final ceremony step (section 8.1)
+      break;
+    }
+    case 'vault_registered': {                // Ceremony 8.2 — purple descent, foundation mark
+      const dm = findDiamond(ev.subject_id);
+      if(!dm || dm.stage!=='white'){
+        console.warn('[reject] out-of-grammar register (diamond not sealed/white)', ev); return; }
+      enqueue({ dur:T_DESCENT,
+        onStart:(c)=>{ dm.stage='descending'; dm.descT=c; store.registering=true;
+                       store.aura_state='sealing'; },
+        onDone:()=>{ dm.stage='registered'; store.registering=false; store.everRegistered=true;
+                     // VAULTED increments exactly when the mark settles (checklist 7)
+                     store.foundation_marks.push({idx:store.foundation_marks.length, settleT:clock});
+                     store.vaulted_today++; store.aura_state='witnessing';
+                     ledger(ev); } });   // ledger REGISTERED is the final ceremony step (section 8.2)
+      break;
+    }
+    case 'zero_seat_surfaced':                // amber, surfaces, does not block (section 3.1 r5)
+      enqueue({ dur:T_SIGNAL,
+        onStart:(c)=>{ store.signals.push({id:ev.subject_id,disc:PRIMARY_DISC[store.mode]||'project',
+                       label:ev.label,t0:c}); } });
+      ledger(ev); break;
+
+    case 'state_hold':                        // explicit hold — everything persists
+      store.held=true; store.aura_state='witnessing';
+      ledger(ev); break;
+
+    case 'fault':                             // severe fault only, red, outside ceremony
+      ledger(ev); break;
+  }
+}
+
+/* ---- Witness ledger projection (section 5.3) + redaction (section 11.3) ---- */
+function fmtTime(t){
+  const s = Math.floor(14*3600 + t);
+  const hh=String(Math.floor(s/3600)%24).padStart(2,'0');
+  const mm=String(Math.floor(s/60)%60).padStart(2,'0');
+  const ss=String(s%60).padStart(2,'0');
+  return hh+':'+mm+':'+ss;
+}
+function ledgerEntry(ev){
+  const priv = ev.visibility==='private';
+  const nm = s => (NAME_OF[s]||s.toUpperCase());
+  const gn = s => s.replace(/^glyph_/,'').replace(/_/g,' ').toUpperCase();
+  switch(ev.event_type){
+    case 'mode_entered':      return {label:ev.mode.toUpperCase()+' MODE', color:WHITE};
+    case 'agenda_loaded':     return {label:'AGENDA LOADED', color:CYAN};
+    case 'project_loaded':    return {label:'PROJECT LOADED', color:CYAN};
+    case 'graduate_invoked':  return {label:nm(ev.subject_id)+' SEATED', color:CYAN};
+    case 'graduate_released': return {label:nm(ev.subject_id)+' RELEASED', color:CYAN};
+    case 'glyph_loaded':      return {label:gn(ev.subject_id)+' FORMING', color:CYAN};
+    case 'glyph_resolved':    return {label:gn(ev.subject_id)+' RESOLVED', color:CYAN};
+    case 'relay_activated':   return {label:'RELAY OPEN', color:CYAN};
+    case 'relay_resolved':    return {label:'RELAY CLOSED', color:CYAN};
+    case 'proposal_formed':   return {label: priv?'ITEM PROPOSED':(ev.label||'PROPOSAL FORMED'), color:WHITE};
+    case 'awaiting_human':    return {label:'AWAITING CONFIRMATION', color:WHITE};
+    case 'seal_completed':    return {label: priv?'ITEM SEALED':(ev.label||'SEALED'), color:GOLD};
+    case 'vault_registered':  return {label: priv?'ITEM REGISTERED':'REGISTERED', color:PURPLE};
+    case 'zero_seat_surfaced':return {label: ev.label||'ZERO SEAT', color:AMBER};
+    case 'state_hold':        return {label:'HOLD', color:WHITE};
+    case 'fault':             return {label:'FAULT', color:FAULT};
+  }
+  return null;
+}
+function ledger(ev){
+  const e = ledgerEntry(ev); if(!e) return;
+  // time string is the event's logical offset; addClock is live (drives fade-in)
+  store.ledger.push({time:fmtTime(ev.t), label:e.label, color:e.color, addClock:clock});
+}
+
+/* ============================================================================
+   8. PLAYBACK CLOCK + UPDATE
+   ========================================================================== */
+let clock = 0, paused = false, lastFrame = performance.now(), fired = 0;
+function restart(){
+  store = initStore(); queue=[]; active=null; lastDoneT=-1e9; clock=0; fired=0;
+  G.reform = {agenda:null,project:null,guild:null}; aura.init=false;
+}
+function update(){
+  // fire scripted events whose t has arrived
+  while(fired < SEQ.events.length && SEQ.events[fired].t <= clock){
+    applyEvent(SEQ.events[fired], clock);
+    fired++;
+  }
+  updateQueue(clock);
+  // mode transition: switch mode + start disc reform at the dim->reform boundary (section 6.1)
+  const tr = store.transition;
+  if(tr && !tr.switched && clock - tr.start >= T_DIM){
+    store.mode = tr.toMode;
+    store.active_disc = PRIMARY_DISC[tr.toMode];
+    G.reform[store.active_disc] = clock;
+    tr.switched = true;
+  }
+}
+
+/* ============================================================================
+   9. RENDER LIBRARY  (reads state, draws what is true — never decides)
+   ========================================================================== */
+const rgba = (c,a)=> 'rgba('+c+','+a+')';
+function ell(cx,cy,rx,ry,c,a,lw,blur){
+  ctx.save();
+  if(blur){ctx.shadowColor=rgba(c,a);ctx.shadowBlur=blur;}
+  ctx.strokeStyle=rgba(c,a); ctx.lineWidth=lw;
+  ctx.beginPath(); ctx.ellipse(cx,cy,rx,Math.max(ry,0.5),0,0,TAU); ctx.stroke();
+  ctx.restore();
+}
+function dot(x,y,r,c,a,blur){
+  ctx.save();
+  if(blur){ctx.shadowColor=rgba(c,a);ctx.shadowBlur=blur;}
+  ctx.fillStyle=rgba(c,a); ctx.beginPath(); ctx.arc(x,y,r,0,TAU); ctx.fill();
+  ctx.restore();
+}
+function seatMark(x,y,c,a,blur){
+  ctx.save(); ctx.translate(x,y); ctx.rotate(0.785);
+  if(blur){ctx.shadowColor=rgba(c,a);ctx.shadowBlur=blur;}
+  ctx.fillStyle=rgba(c,a); ctx.fillRect(-1.8,-1.8,3.6,3.6); ctx.restore();
+}
+function diamond(x,y,sz,rot,c,fillA,strokeA,blur){
+  ctx.save(); ctx.translate(x,y); ctx.rotate(rot);
+  if(blur){ctx.shadowColor=rgba(c,strokeA);ctx.shadowBlur=blur;}
+  ctx.fillStyle=rgba(c,fillA); ctx.strokeStyle=rgba(c,strokeA); ctx.lineWidth=1.4;
+  ctx.beginPath(); ctx.rect(-sz,-sz,sz*2,sz*2); ctx.fill(); ctx.stroke();
+  ctx.restore();
+}
+function label(x,y,txt,c,a){
+  ctx.save();
+  ctx.font='10px ui-monospace,"SF Mono",monospace';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillStyle=rgba(c,a);
+  // approximate letter-spacing
+  const sp=1.2; let total=0; for(const ch of txt) total+=ctx.measureText(ch).width+sp;
+  let cx=x-total/2;
+  for(const ch of txt){ const w=ctx.measureText(ch).width; ctx.fillText(ch,cx+w/2,y); cx+=w+sp; }
+  ctx.restore();
+}
+
+// ---- Spine (section 4.1): cyan base, white at seal, purple descent ----
+function drawSpine(){
+  let whiteAmt=0, descend=null;
+  for(const dm of store.diamonds){
+    if(dm.stage==='sealing'){ const p=clamp((clock-dm.sealT)/T_SEAL,0,1);
+      whiteAmt=Math.max(whiteAmt, Math.sin(clamp(p/0.55,0,1)*Math.PI*0.85)); }
+    if(dm.stage==='descending') descend=dm;
+  }
+  const multi = 0.04*breath(clock);
+  const col = whiteAmt>0.02 ? WHITE : CYAN;
+  const a = 0.10 + 0.55*whiteAmt + multi;
+  const g = ctx.createLinearGradient(0,G.spineTop,0,G.spineBot);
+  g.addColorStop(0,   rgba(col,0));
+  g.addColorStop(0.5, rgba(col,a));
+  g.addColorStop(1,   rgba(col,0));
+  ctx.save();
+  if(whiteAmt>0.02){ctx.shadowColor=rgba(WHITE,whiteAmt);ctx.shadowBlur=12*whiteAmt;}
+  ctx.strokeStyle=g; ctx.lineWidth=1.1;
+  ctx.beginPath(); ctx.moveTo(G.spineX,G.spineTop); ctx.lineTo(G.spineX,G.spineBot); ctx.stroke();
+  ctx.restore();
+  if(descend){
+    const p=easeInOutSine(clamp((clock-descend.descT)/T_DESCENT,0,1));
+    const y0=G.discs[descend.disc].cy - G.S*0.045, y1=G.foundation.cy;
+    const y=lerp(y0,y1,p);
+    const pg=ctx.createLinearGradient(0,y0,0,y);
+    pg.addColorStop(0,rgba(PURPLE,0)); pg.addColorStop(1,rgba(PURPLE,0.5));
+    ctx.save(); ctx.strokeStyle=pg; ctx.lineWidth=1.4;
+    ctx.beginPath(); ctx.moveTo(G.spineX,y0); ctx.lineTo(G.spineX,y); ctx.stroke(); ctx.restore();
+  }
+}
+
+// ---- Discs (section 4.3). Guild seats drawn separately. ----
+function drawDiscEllipse(name){
+  const d=G.discs[name];
+  const isActive = store.active_disc===name;
+  let reformP=1;
+  if(G.reform[name]!=null) reformP=clamp((clock-G.reform[name])/T_REFORM,0,1);
+  const settle = easeInOutSine(reformP);
+  let base = isActive ? 0.50 : 0.26;
+  if(store.mode==='free' && name==='agenda') base=0.30;        // Free: Agenda dim (section 6)
+  const a = base*(0.25+0.75*settle);
+  ell(d.cx,d.cy,d.rx,d.ry,CYAN,a,1.2,9*a);
+  if(name!=='guild'){
+    const N=9, spin=(1-easeOutCubic(reformP))*TAU*0.5 + clock*0.05;
+    for(let i=0;i<N;i++){
+      const ang=i/N*TAU+spin;
+      const sx=d.cx+Math.cos(ang)*d.rx, sy=d.cy+Math.sin(ang)*d.ry;
+      const pulse=0.4+0.45*Math.pow(Math.max(0,Math.sin(clock*1.0+i*0.7)),2);
+      seatMark(sx,sy,CYAN,(0.16+0.14*pulse)*settle*(isActive?1.3:0.8),5);
+    }
+  }
+}
+
+// ---- Guild seats + graduates (sections 5.2, 12) ----
+function drawSeatsAndGraduates(){
+  const gd=G.discs.guild;
+  for(let i=0;i<6;i++){
+    const s=G.seats[i], g=store.seats[i];
+    let occ=0, gx=s.x, gy=s.y, gAlpha=1, trail=0, bob=0;
+    if(g){
+      if(g.state==='arriving'){
+        const p=easeOutCubic(clamp((clock-g.t0)/T_ARRIVE,0,1));
+        const dir=(s.x>=gd.cx)?1:-1;
+        gx=lerp(s.x+dir*G.S*0.30, s.x, p);
+        gy=lerp(s.y-G.S*0.22, s.y, p);
+        occ=p; trail=1-p;
+      } else if(g.state==='docked'){
+        occ=1; bob=Math.sin(clock*1.7+i)*1.6;
+        gy=s.y+bob;
+      } else if(g.state==='departing'){
+        const p=easeInOutSine(clamp((clock-g.t0)/T_DEPART,0,1));
+        const dir=(s.x>=gd.cx)?1:-1;
+        gx=lerp(s.x, s.x+dir*G.S*0.30, p);
+        gy=lerp(s.y, s.y-G.S*0.22, p);
+        occ=1; gAlpha=1-p;
+      }
+    }
+    // seat marker brightens on dock, not before
+    seatMark(s.x,s.y,CYAN, 0.22+0.55*occ, 6+6*occ);
+    if(g){ drawSaucer(gx,gy,(s.x>=gd.cx)?-1:1,gAlpha,trail); label(s.x, s.y+G.S*0.045, g.name, CYAN, 0.55*gAlpha); }
+  }
+}
+function drawSaucer(x,y,dir,a,trail){
+  const sc=G.S/900;
+  ctx.save(); ctx.translate(x,y); ctx.scale(dir*sc,sc); ctx.globalAlpha=a;
+  if(trail>0){
+    const tg=ctx.createLinearGradient(-46,0,-14,0);
+    tg.addColorStop(0,rgba(CYAN,0)); tg.addColorStop(1,rgba(CYAN,0.30*trail));
+    ctx.fillStyle=tg; ctx.beginPath(); ctx.moveTo(-14,-2.5); ctx.lineTo(-46,0); ctx.lineTo(-14,2.5); ctx.closePath(); ctx.fill();
+  }
+  ctx.shadowColor=rgba(CYAN,0.6); ctx.shadowBlur=12;
+  ctx.fillStyle='rgba(16,26,36,0.95)';
+  ctx.beginPath(); ctx.ellipse(0,3,13,4.2,0,0,TAU); ctx.fill();
+  ctx.shadowBlur=0; ctx.strokeStyle=rgba(CYAN,0.85); ctx.lineWidth=1;
+  ctx.beginPath(); ctx.ellipse(0,3,13,4.2,0,0,TAU); ctx.stroke();
+  ctx.fillStyle=rgba(CYAN,0.22); ctx.beginPath(); ctx.arc(0,1,6.5,Math.PI,0); ctx.fill();
+  ctx.strokeStyle=rgba(CYAN,0.8); ctx.beginPath(); ctx.arc(0,1,6.5,Math.PI,0); ctx.stroke();
+  ctx.shadowColor=rgba(CYAN,0.8); ctx.shadowBlur=5; ctx.fillStyle=rgba(CYAN,1);
+  ctx.beginPath(); ctx.arc(-3.5,-0.5,1.8,0,TAU); ctx.fill();
+  ctx.beginPath(); ctx.arc(3.5,-0.5,1.8,0,TAU); ctx.fill();
+  ctx.restore();
+}
+
+// ---- Foundation Ring + marks (sections 4.2, 6) ----
+function drawFoundation(){
+  const f=G.foundation;
+  let glow=0;
+  for(const dm of store.diamonds) if(dm.stage==='descending'){
+    glow=Math.max(glow, clamp((clock-dm.descT)/T_DESCENT,0,1));
+  }
+  ell(f.cx,f.cy,f.rx,f.ry,CYAN,0.16+0.25*glow,1.0,6+8*glow);
+  for(const m of store.foundation_marks){
+    const ang=(90+m.idx*14)*Math.PI/180;
+    const mx=f.cx+Math.cos(ang)*f.rx, my=f.cy+Math.sin(ang)*f.ry;
+    const k=clamp((clock-m.settleT)/T_MARK_SETTLE,0,1);
+    const a=0.35+0.65*(1-k);                 // settle: 1.0 -> 0.35 over 2.0s
+    dot(mx,my,6,GOLD,a*0.18,8);              // halo
+    dot(mx,my,2.5,GOLD,a,6);                 // gold-residue point
+  }
+}
+
+// ---- Glyphs (craft, cyan) ----
+function drawGlyphs(){
+  for(const g of store.glyphs){
+    const d=G.discs[g.disc];
+    const x=d.cx - d.rx*0.55, y=d.cy - G.S*0.02, sz=G.S*0.010, rot=Math.PI/4+clock*0.5;
+    let a;
+    if(g.state==='forming'){
+      const p=clamp((clock-g.t0)/T_GLYPH_FORM,0,1);
+      a=easeInOutSine(p)*(0.45+0.35*flickerAlpha(clock,g.id.length));
+    } else {
+      a=(g.state==='resolved'?0.62:0.78)*(0.85+0.15*Math.sin(clock*1.4));
+    }
+    diamond(x,y,sz,rot,CYAN,a*0.3,a,9);
+  }
+}
+
+// ---- Signals (amber zero-seat, surfaces, does not block) ----
+function drawSignals(){
+  for(const s of store.signals){
+    const d=G.discs[s.disc];
+    const x=d.cx + d.rx*0.7, y=d.cy - d.ry - G.S*0.03;
+    const p=clamp((clock-s.t0)/T_SIGNAL,0,1);
+    const a=easeInOutSine(p)*0.85*(0.8+0.2*Math.sin(clock*1.6));
+    const sz=G.S*0.011;
+    ctx.save(); ctx.translate(x,y); ctx.rotate(0.785);
+    ctx.shadowColor=rgba(AMBER,a); ctx.shadowBlur=11; ctx.strokeStyle=rgba(AMBER,a); ctx.lineWidth=1.5;
+    ctx.strokeRect(-sz,-sz,sz*2,sz*2); ctx.strokeRect(-sz*0.4,-sz*0.4,sz*0.8,sz*0.8);
+    ctx.restore();
+  }
+}
+
+// ---- Relays (cyan line + pulse traversal) ----
+function drawRelays(){
+  for(const r of store.relays){
+    const a=seatPosById(r.from), b=seatPosById(r.to);
+    if(!a||!b) continue;
+    const p=clamp((clock-r.t0)/T_RELAY,0,1);
+    const drawP=easeInOutSine(clamp(p/0.5,0,1));
+    const ex=lerp(a.x,b.x,drawP), ey=lerp(a.y,b.y,drawP);
+    ctx.save(); ctx.strokeStyle=rgba(CYAN,0.3); ctx.shadowColor=rgba(CYAN,0.4); ctx.shadowBlur=6; ctx.lineWidth=1.1;
+    ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(ex,ey); ctx.stroke(); ctx.restore();
+    if(p>0.2){ const pp=((clock-r.t0)*0.8)%1; dot(lerp(a.x,b.x,pp),lerp(a.y,b.y,pp),1.6,WHITE,0.9,8); }
+  }
+}
+
+// ---- Diamonds: the lifecycle object (section 5.5) ----
+function isAnticipating(dm){ return store.anticipation.active && store.anticipation.subject_id===dm.id; }
+function diamondHomePos(dm){ const d=G.discs[dm.disc]; return {x:d.cx, y:d.cy - G.S*0.045}; }
+function drawDiamonds(){
+  const sz=G.S*0.014, rot=Math.PI/4+clock*0.4;
+  for(const dm of store.diamonds){
+    if(dm.stage==='registered') continue;
+    const home=diamondHomePos(dm);
+    if(dm.stage==='descending'){
+      const p=easeInOutSine(clamp((clock-dm.descT)/T_DESCENT,0,1));
+      const x=lerp(home.x,G.spineX,clamp(p*2,0,1));
+      const y=lerp(home.y,G.foundation.cy,p);
+      diamond(x,y,sz*(1-0.25*p),rot,PURPLE,0.5,0.9,12);
+      continue;
+    }
+    if(dm.stage==='flicker'){
+      let fa=flickerAlpha(clock,dm.seed);
+      if(isAnticipating(dm)) fa*=(0.6+0.4*breath(clock));   // anticipation breath overlay
+      diamond(home.x,home.y,sz,rot,WHITE,fa*0.22,fa,10*fa);
+    } else if(dm.stage==='sealing'){
+      const p=clamp((clock-dm.sealT)/T_SEAL,0,1);
+      const white=easeInOutSine(clamp(p/0.4,0,1));
+      const ringP=easeOutCubic(clamp(p/0.6,0,1));
+      const ringR=lerp(G.S*0.055,sz*2.2,ringP);
+      ell(home.x,home.y,ringR,ringR,WHITE,(1-ringP)*0.55+0.2,1.4,8);     // ring closes
+      diamond(home.x,home.y,sz,rot,WHITE,0.32*white,0.95,12);
+      const gp=Math.max(0,Math.sin(clamp((p-0.45)/0.4,0,1)*Math.PI));     // single gold pulse
+      if(gp>0.01){ diamond(home.x,home.y,sz*1.1,rot,GOLD,0.4*gp,gp,16); dot(home.x,home.y,sz*0.4,GOLD,gp,18*gp); }
+    } else if(dm.stage==='white'){
+      const br=0.88+0.12*Math.sin(clock*1.5+dm.seed);
+      diamond(home.x,home.y,sz,rot,WHITE,0.30,0.95*br,12);
+    }
+  }
+}
+
+// ---- Aura (section 5.1): orb that hovers, witnesses, anticipates, seals ----
+const aura = {x:0,y:0,from:null,to:null,start:0,key:'',init:false};
+function auraTarget(){
+  const a=store.aura_state;
+  if(a==='sealing'){ for(const dm of store.diamonds) if(dm.stage==='sealing'||dm.stage==='descending'){
+        const h=diamondHomePos(dm); return {x:G.spineX,y:h.y,key:'seal'}; } }
+  if(a==='anticipating' && store.anticipation.active){
+    const dm=findDiamond(store.anticipation.subject_id);
+    if(dm){ const h=diamondHomePos(dm); return {x:h.x+G.S*0.06,y:h.y-G.S*0.05,key:'antic'}; } }
+  if(store.mode!=='free'){ const d=G.discs[PRIMARY_DISC[store.mode]];
+    return {x:d.cx, y:d.cy-d.ry-G.S*0.06, key:'work-'+store.mode}; }
+  return {x:G.aura.x, y:G.aura.y, key:'idle'};
+}
+function drawAura(){
+  const tgt=auraTarget();
+  if(!aura.init){ aura.x=tgt.x; aura.y=tgt.y; aura.from={x:tgt.x,y:tgt.y}; aura.to={x:tgt.x,y:tgt.y}; aura.key=tgt.key; aura.init=true; }
+  if(tgt.key!==aura.key){ aura.from={x:aura.x,y:aura.y}; aura.to={x:tgt.x,y:tgt.y}; aura.start=clock; aura.key=tgt.key; }
+  const mp=easeInOutSine(clamp((clock-aura.start)/1.2,0,1));
+  aura.x=lerp(aura.from.x,aura.to.x,mp); aura.y=lerp(aura.from.y,aura.to.y,mp);
+  let ax=aura.x, ay=aura.y;
+  if(aura.key==='idle'){ ax+=Math.sin(clock*0.5)*G.aura.drift; ay+=Math.sin(clock*0.37+1.2)*G.aura.drift*0.7; }
+
+  // light thread to the work when anticipating / working
+  if(store.aura_state==='anticipating' && store.anticipation.active){
+    const dm=findDiamond(store.anticipation.subject_id);
+    if(dm){ const h=diamondHomePos(dm);
+      ctx.save(); ctx.strokeStyle=rgba(CYAN,0.12); ctx.lineWidth=1;
+      ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(h.x,h.y); ctx.stroke(); ctx.restore(); }
+  }
+  let lum=0.5+0.5*breath(clock);
+  if(store.aura_state==='anticipating') lum=0.45+0.55*breath(clock);   // gentle anticipation pulse
+  const c = store.aura_state==='sealing' ? WHITE : CYAN;
+  const r=G.S*0.013;
+  dot(ax,ay,r*2.2,c,0.10*lum,18);
+  dot(ax,ay,r,c,0.45+0.4*lum,14);
+  dot(ax,ay,r*0.45,WHITE,0.7+0.3*lum,10);
+}
+
+/* ============================================================================
+   10. RENDER LOOP
+   ========================================================================== */
+function render(){
+  ctx.clearRect(0,0,G.W,G.H);
+  ctx.fillStyle=VOID; ctx.fillRect(0,0,G.W,G.H);
+
+  drawSpine();
+  drawDiscEllipse('agenda'); drawDiscEllipse('project'); drawDiscEllipse('guild');
+  drawFoundation();
+  drawSeatsAndGraduates();
+  drawRelays();
+  drawGlyphs();
+  drawSignals();
+  drawDiamonds();
+  drawAura();
+
+  // mode-transition dim overlay (section 6.1) — dim, hold, reform, return
+  if(store.transition){
+    const p=clock-store.transition.start; let dim;
+    if(p<T_DIM) dim=easeInOutSine(p/T_DIM)*0.55;
+    else dim=0.55*(1-easeInOutSine(clamp((p-T_DIM)/(T_REFORM*0.5),0,1)));
+    ctx.save(); ctx.fillStyle=rgba('5,7,13',dim); ctx.fillRect(0,0,G.W,G.H); ctx.restore();
+  }
+  updateHUD();
+}
+
+/* ============================================================================
+   11. WITNESS LAYER — HUD as a pure projection of the store (section 5, 11)
+   ========================================================================== */
+const MODE_HUD = {
+  free:   {ul:['FREE MODE','LISTENING'],          ur:['ACTIVE DISC: AGENDA','COUNCIL: IDLE']},
+  plan:   {ul:['PLAN MODE','PURPOSE FORMING'],     ur:['ACTIVE DISC: AGENDA','COUNCIL: SEATED']},
+  forge:  {ul:['FORGE MODE','SYNTHESIS'],          ur:['ACTIVE DISC: PROJECT','OUTPUT: FORMING']},
+  meeting:{ul:['MEETING MODE','COUNCIL IN SESSION'],ur:['ACTIVE DISC: GUILD','SCRIBE: ACTIVE']},
+  build:  {ul:['BUILD MODE','EXECUTION'],          ur:['ACTIVE DISC: PROJECT','TASK CHAIN: RUNNING']}
+};
+const elUL=document.getElementById('ul'), elUR=document.getElementById('ur'),
+      elLL=document.getElementById('ll'), elLR=document.getElementById('lr'),
+      elLedger=document.getElementById('ledger');
+function lrLines(){
+  const N=store.sealed_today, V=store.vaulted_today, ctr='SEALED: '+N+' / VAULTED: '+V;
+  if(store.registering) return ['VAULT: OPEN','MEMORY: WRITING'];
+  if(store.sealing)     return ['SEAL: COMPLETING',''];
+  if(store.anticipation.active) return ['STATE: AWAITING CONFIRMATION',ctr];
+  if(store.everRegistered) return ['VAULT: CLOSED',ctr];
+  return ['STATE: HOLDING',ctr];
+}
+function updateHUD(){
+  const m=MODE_HUD[store.mode]||MODE_HUD.free;
+  elUL.innerHTML='<span class="ttl">A U R A</span>'
+    +'<div class="v">'+m.ul[0]+'</div><div class="k">'+m.ul[1]+'</div>';
+  elUR.innerHTML='<div class="v">'+m.ur[0]+'</div><div class="k">'+m.ur[1]+'</div>'
+    +'<div class="sub">SEQ-001 · FIRST LIGHT</div>';
+  elLL.innerHTML='<div><span class="k">STATION</span> <span class="v">AURA-BASE 01</span></div>'
+    +'<div><span class="k">BUILD</span> <span class="v">ATD-002 v1.1</span></div>';
+  const lr=lrLines();
+  elLR.innerHTML='<div class="v">'+lr[0]+'</div>'+(lr[1]?'<div class="k">'+lr[1]+'</div>':'');
+  // Witness ledger: last 5, newest at top, oldest fading (section 11.2)
+  const last=store.ledger.slice(-5).reverse();
+  const baseOp=[1,0.7,0.5,0.34,0.2];
+  let html='';
+  for(let i=0;i<last.length;i++){
+    const e=last[i];
+    const fade=clamp((clock-e.addClock)/T_LEDGER_FADE,0,1);
+    const op=(baseOp[i]||0.2)*fade;
+    html+='<div style="opacity:'+op.toFixed(3)+'"><span class="k">'+e.time
+        +'</span> <span style="color:rgb('+e.color+')">'+e.label+'</span></div>';
+  }
+  elLedger.innerHTML=html;
+}
+
+/* ============================================================================
+   12. FRAME DRIVER + OPERATOR KEYS  (SPACE pause, R restart, H hud, L ledger)
+   ========================================================================== */
+function frame(now){
+  const dt=Math.min((now-lastFrame)/1000, 0.05); lastFrame=now;
+  if(!paused){ clock+=dt; update(); }
+  render();
+  requestAnimationFrame(frame);
+}
+window.addEventListener('keydown',(e)=>{
+  const k=e.key.toLowerCase();
+  if(e.code==='Space'||k===' '){ e.preventDefault(); paused=!paused;
+    document.getElementById('paused').classList.toggle('show',paused); }
+  else if(k==='r'){ restart(); }
+  else if(k==='h'){ document.getElementById('hud').classList.toggle('off'); }
+  else if(k==='l'){ elLedger.classList.toggle('off'); }
+});
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
